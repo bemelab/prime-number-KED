@@ -844,20 +844,41 @@ def mail_gonder(ayar, konu, govde):
     m['From'] = ayar['gonderen']
     m['To'] = ayar['alici']
     m.set_content(govde)
-    try:
-        baglam = ssl.create_default_context()
-        if ayar['port'] == 465:
-            s = smtplib.SMTP_SSL(ayar['sunucu'], 465, context=baglam, timeout=30)
-        else:
-            s = smtplib.SMTP(ayar['sunucu'], ayar['port'], timeout=30)
-            if ayar['sunucu'] not in ('localhost', '127.0.0.1'):
-                s.starttls(context=baglam)
-        with s:
-            s.login(ayar['gonderen'], ayar['sifre'])
-            s.send_message(m, to_addrs=ayar['alicilar'])
-        return None
-    except Exception as e:
-        return '%s: %s' % (type(e).__name__, e)
+    hatalar = []
+    # Sunucu girisi yanitsiz keserse yeni baglantiyla diger giris yontemi denenir (Gmail bazen PLAIN'i keser).
+    for yontem in (None, 'LOGIN', 'PLAIN'):
+        asama = 'sunucuya bağlanma (%s:%d)' % (ayar['sunucu'], ayar['port'])
+        try:
+            baglam = ssl.create_default_context()
+            if ayar['port'] == 465:
+                s = smtplib.SMTP_SSL(ayar['sunucu'], 465, context=baglam, timeout=30)
+            else:
+                s = smtplib.SMTP(ayar['sunucu'], ayar['port'], timeout=30)
+                if ayar['sunucu'] not in ('localhost', '127.0.0.1'):
+                    asama = 'şifreli bağlantı (STARTTLS)'
+                    s.starttls(context=baglam)
+            with s:
+                asama = 'giriş (%s)' % (yontem or 'varsayılan yöntem')
+                if yontem:
+                    s.ehlo_or_helo_if_needed()
+                    if yontem not in s.esmtp_features.get('auth', '').upper().split():
+                        continue
+                    s.esmtp_features['auth'] = yontem
+                s.login(ayar['gonderen'], ayar['sifre'])
+                asama = 'gönderme (%d alıcı)' % len(ayar['alicilar'])
+                s.send_message(m, to_addrs=ayar['alicilar'])
+            return None
+        except smtplib.SMTPAuthenticationError as e:
+            return ('giriş reddedildi (%s): %s. Uygulama şifresini ve gönderen adresini kontrol edin; '
+                    'şifre silindiyse yenisini oluşturun.' % (e.smtp_code, e.smtp_error.decode('utf-8', 'replace')[:200]))
+        except smtplib.SMTPServerDisconnected as e:
+            hatalar.append('%s aşamasında bağlantı kesildi (%s)' % (asama, e))
+            if not asama.startswith('giriş'):
+                break
+        except Exception as e:
+            hatalar.append('%s aşamasında %s: %s' % (asama, type(e).__name__, e))
+            break
+    return ' | '.join(hatalar)
 
 
 class MailBildirici:
