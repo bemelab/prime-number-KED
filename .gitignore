@@ -1,0 +1,24 @@
+# Kisisel ayarlar: Gmail uygulama sifresi icerir, ASLA yuklenmez
+MAIL_AYARLARI.txt
+
+# Python / derleme artiklari
+__pycache__/
+*.pyc
+*.obj
+*.lib
+*.exp
+*.tmp
+
+# Kisayollar bu bilgisayara ozel yol icerir
+*.lnk
+
+# Eski sonuc arsivi (buyuk zip)
+KED/ARSIV/
+
+# Tarama sonuclari: yalniz ozetler (SAYACLAR.txt, checkpoint, gunluk) ve P8+ zincirler yuklenir
+**/PATI_TARAMALAR/*/P6/
+**/PATI_TARAMALAR/*/P7/
+
+# Kullanicinin elle aldigi tam sonuc arsivleri (P6/P7 dahil, buyuk)
+*.rar
+*.zip

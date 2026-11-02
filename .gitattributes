@@ -1,0 +1,4 @@
+# Tarama sonuclari bayt bayt korunur (checkpoint SHA256 dogrulamasi satir sonlarina duyarlidir)
+**/PATI_TARAMALAR/** -text
+*.dll binary
+*.exe binary
