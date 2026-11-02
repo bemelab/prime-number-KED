@@ -212,6 +212,7 @@ def checkpoint_yaz(path, d):
     satirlar += ['%s = %d' % (k, d[k]) for k in CK_TOPLAM_ALANLARI]
     satirlar.append('son_bolum_dosyalari = ' + ','.join(d.get('son_bolum_dosyalari') or []))
     satirlar.append('son_bolum_sha256 = ' + (d.get('son_bolum_sha256') or ''))
+    satirlar.append('toplam_sure_sn = %d' % d.get('toplam_sure_sn', 0))
     satirlar += ['%s = %s' % (k, d[k]) for k in CK_TARIH_ALANLARI if k in d]
     atomic_txt(path, '\n'.join(satirlar) + '\n')
     sayac_dosyasi_yaz(path.parent, d)
@@ -231,6 +232,7 @@ def sayac_dosyasi_yaz(folder, d):
                 'Durum             : %s' % ('TAMAMLANDI' if sinir >= bit else 'devam ediyor / durduruldu'),
                 'Tarama baslangici : %s' % d.get('tarama_baslama_tarihi', '-'),
                 'Tarama bitisi     : %s' % d.get('tarama_bitis_tarihi', '-'),
+                'Toplam calisma    : %s' % sure_yaz_sn(d.get('toplam_sure_sn', 0)),
                 'Dosya guncellendi : %s' % simdi(),
                 '',
                 'Zincir uzunluklari (tam uzunluk):']
@@ -263,6 +265,10 @@ def checkpoint_oku(path):
         raise RuntimeError('Checkpoint TXT okunamadı (%s). SİLMEYİN.' % e)
     d['son_bolum_dosyalari'] = [x for x in alanlar.get('son_bolum_dosyalari', '').split(',') if x]
     d['son_bolum_sha256'] = alanlar.get('son_bolum_sha256', '')
+    try:
+        d['toplam_sure_sn'] = int(alanlar.get('toplam_sure_sn') or 0)
+    except ValueError:
+        d['toplam_sure_sn'] = 0
     for k in CK_TARIH_ALANLARI:
         if alanlar.get(k):
             d[k] = alanlar[k]
@@ -361,6 +367,16 @@ def sure_yaz(saniye):
     if gun:
         return '%d gün %d sa %d dk' % (gun, saat, dakika)
     return '%d sa %d dk' % (saat, dakika)
+
+
+def sure_yaz_sn(saniye):
+    """Gecen sure: '2 gün 03:04:05' ya da '03:04:05'."""
+    saniye = int(saniye)
+    gun, saniye = divmod(saniye, 86400)
+    saat, saniye = divmod(saniye, 3600)
+    dakika, saniye = divmod(saniye, 60)
+    metin = '%02d:%02d:%02d' % (saat, dakika, saniye)
+    return '%d gün %s' % (gun, metin) if gun else metin
 
 
 TARAMALAR_KLASORU = Path(__file__).resolve().parent/'PATI_TARAMALAR'
@@ -567,6 +583,8 @@ def tara(start, end, block, chunk, output, show_min, cooldown, isci_al, olay, du
     oturum_baslama = simdi()
     gunluge_yaz(output, '%s | OTURUM BASLADI | kaldigi yer %s | isci %d | motor %s' % (
         oturum_baslama, f'{alt:,}', isci, motor))
+    t_oturum = time.monotonic()  # toplam_sure_sn = onceki oturumlar + bu oturum
+    sure_baz = d.get('toplam_sure_sn', 0)
     olay('basladi', {'d': d, 'oturum_baslama': oturum_baslama, 'txtdir': str(output), 'isci': isci, 'motor': motor})
     son_bildirim = 0.0
     # Son ~30 sn'lik hiz: isci sayisi degisince kalan sure hemen guncellenir. (zaman, konum, incelenen asal)
@@ -675,6 +693,7 @@ def tara(start, end, block, chunk, output, show_min, cooldown, isci_al, olay, du
                 raise RuntimeError('Sayaçların asal toplamı ile uyuşmazlığı!')
             if b['ust'] >= end:
                 newd['tarama_bitis_tarihi'] = simdi()
+            newd['toplam_sure_sn'] = sure_baz + int(time.monotonic() - t_oturum)
             checkpoint_yaz(ckpath,newd)
             d=newd
             alt=b['ust']
@@ -691,7 +710,12 @@ def tara(start, end, block, chunk, output, show_min, cooldown, isci_al, olay, du
             simdi(), d['tarama_baslama_tarihi'], d['tarama_bitis_tarihi']))
         olay('bitti', d)
     else:
-        gunluge_yaz(output, '%s | OTURUM DURDURULDU | son kalici sinir %s' % (simdi(), f'{alt:,}'))
+        # Durdurulunca son kayittan sonraki calisma suresi de toplama eklenir (sinir ve sayaclar ayni kalir).
+        d = dict(d)
+        d['toplam_sure_sn'] = sure_baz + int(time.monotonic() - t_oturum)
+        checkpoint_yaz(ckpath, d)
+        gunluge_yaz(output, '%s | OTURUM DURDURULDU | son kalici sinir %s | toplam calisma %s' % (
+            simdi(), f'{alt:,}', sure_yaz_sn(d['toplam_sure_sn'])))
         olay('durdu', d)
 
 
@@ -959,6 +983,7 @@ def konsol_calistir(a):
             print('ASAL DONGU =', d['dongu'])
             print('64 BIT USTU MR TESTI =', d['64_bit_ustu_mr_test'])
             print('TARAMA BASLAMA:', d.get('tarama_baslama_tarihi'), '| BITIS:', d.get('tarama_bitis_tarihi'), flush=True)
+            print('TOPLAM CALISMA SURESI:', sure_yaz_sn(d.get('toplam_sure_sn', 0)), flush=True)
 
     dur = threading.Event()
     hata = []
@@ -1028,6 +1053,7 @@ def pencere_calistir(a):
     olaylar = queue.Queue()
     dur = threading.Event()
     durum = {'calisiyor': False, 'kapat': False}
+    sure_durum = {'t0': None, 'baz': 0, 'son': None}  # calisirken her 200 ms'de gecen sure yenilenir
 
     # --- ust cubuk
     ust = ttk.Frame(kok, padding=(12, 10))
@@ -1138,7 +1164,8 @@ def pencere_calistir(a):
             ('isci', 'Aktif işçi'), ('hiz', 'Hız (son 30 sn)'), ('asal_hiz', 'Test edilen asal'),
             ('kalan', 'Kalan süre'), ('tahmini', 'Tahmini bitiş'),
             ('baslama', 'Tarama başlangıcı'), ('oturum', 'Bu oturum başlangıcı'),
-            ('bitis', 'Tarama bitişi'))):
+            ('bitis', 'Tarama bitişi'), ('oturum_sure', 'Bu oturumda geçen'),
+            ('toplam_sure', 'Toplam çalışma süresi'))):
         ttk.Label(bilgi, text=baslik + ':', style='Baslik.TLabel').grid(row=satir, column=0, sticky='w', pady=1)
         etiket = ttk.Label(bilgi, text='-', style='Deger.TLabel')
         etiket.grid(row=satir, column=1, sticky='w', padx=(10, 0), pady=1)
@@ -1186,6 +1213,8 @@ def pencere_calistir(a):
         bilgi_alanlari['kalici'].configure(text=f'{d["tamamlanan_sinir"]:,}')
         bilgi_alanlari['baslama'].configure(text=d.get('tarama_baslama_tarihi', '-'))
         bilgi_alanlari['bitis'].configure(text=d.get('tarama_bitis_tarihi', '-'))
+        if sure_durum['t0'] is None:
+            bilgi_alanlari['toplam_sure'].configure(text=sure_yaz_sn(d.get('toplam_sure_sn', 0)))
 
     def ilerleme_goster(i):
         yuzde_goster(i['konum'])
@@ -1299,11 +1328,17 @@ def pencere_calistir(a):
         durdur_dugme.configure(state='disabled')
         durum_cubugu.configure(text='Durduruluyor... (yarım kalan 1 milyarlık bölüm kaydedilmez)')
 
+    def oturum_suresini_dondur():
+        if sure_durum['t0'] is not None:
+            sure_durum['son'] = time.monotonic() - sure_durum['t0']
+        sure_durum['t0'] = None
+
     def olaylari_isle():
         try:
             while True:
                 tur, veri = olaylar.get_nowait()
                 if tur == 'basladi':
+                    sure_durum.update(t0=time.monotonic(), baz=veri['d'].get('toplam_sure_sn', 0))
                     checkpoint_goster(veri['d'])
                     yuzde_goster(veri['d']['tamamlanan_sinir'])
                     bilgi_alanlari['oturum'].configure(text=veri['oturum_baslama'])
@@ -1327,11 +1362,13 @@ def pencere_calistir(a):
                     kayda_ekle('%s | %s' % (simdi(), veri))
                     mail_durum.configure(text=veri[:90])
                 elif tur == 'durdu':
+                    oturum_suresini_dondur()
                     checkpoint_goster(veri)
                     yuzde_goster(veri['tamamlanan_sinir'])
                     kayda_ekle('%s | Durduruldu. Son kalıcı sınır %s' % (simdi(), f'{veri["tamamlanan_sinir"]:,}'))
                     durum_cubugu.configure(text='Durduruldu. Yeniden başlatınca son kalıcı kayıttan devam eder.')
                 elif tur == 'bitti':
+                    oturum_suresini_dondur()
                     checkpoint_goster(veri)
                     yuzde_goster(veri['tamamlanan_sinir'])
                     bilgi_alanlari['kalan'].configure(text='-')
@@ -1339,6 +1376,7 @@ def pencere_calistir(a):
                     durum_cubugu.configure(text='Tarama tamamlandı. Bitiş: %s' % veri.get('tarama_bitis_tarihi', '-'))
                     baslat_dugme.configure(state='disabled')
                 elif tur == 'hata':
+                    oturum_suresini_dondur()
                     kayda_ekle('HATA: ' + veri)
                     durum_cubugu.configure(text='HATA: ' + veri)
                     messagebox.showerror('PATİ', veri)
@@ -1350,10 +1388,16 @@ def pencere_calistir(a):
                         return
                     # Dugmeleri ve gostergeleri kayitli duruma gore yenile, son mesaji koru.
                     araligi_yukle('bitti')
+                    if sure_durum['son'] is not None:  # son oturumun suresi ekranda kalsin
+                        bilgi_alanlari['oturum_sure'].configure(text=sure_yaz_sn(sure_durum['son']))
                     if not son_durum.startswith('HATA'):
                         durum_cubugu.configure(text=son_durum)
         except queue.Empty:
             pass
+        if sure_durum['t0'] is not None:
+            gecen = time.monotonic() - sure_durum['t0']
+            bilgi_alanlari['oturum_sure'].configure(text=sure_yaz_sn(gecen))
+            bilgi_alanlari['toplam_sure'].configure(text=sure_yaz_sn(sure_durum['baz'] + gecen))
         kok.after(200, olaylari_isle)
 
     def kapat():

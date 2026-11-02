@@ -18,9 +18,10 @@ Zincir `p1 → KED(p1) → KED(KED(p1)) …` asal kaldığı sürece uzar. Uzunl
 | `KED/` | CPU sürümü: Python arayüzü + C hesap çekirdeği (`ked_cekirdek.dll`) |
 | `KED_GPU/` | GPU sürümü: aynı program, zincirler ayrıca ekran kartında (OpenCL) hesaplanır |
 | `KED_GPU/GPU_DENEME/` | GPU'yu CPU ile karşılaştıran bağımsız deneme programı |
+| `KED_CLANG/` | KED_GPU ile aynı program; C çekirdeği LLVM clang ile derlenmiş (karşılaştırma için) |
 | `*/PATI_TARAMALAR/ARALIK_<baş>_<bit>/` | Tarama sonuçları (aşağıya bakın) |
 
-İki sürüm birbirinden bağımsızdır; sonuçlarını kendi `PATI_TARAMALAR` klasörlerine yazar.
+Üç sürüm birbirinden bağımsızdır; sonuçlarını kendi `PATI_TARAMALAR` klasörlerine yazar.
 
 ## Çalıştırma
 
@@ -29,6 +30,7 @@ Gereken: Windows, Python 3.9+ (ek paket yok). GPU sürümü için OpenCL destekl
 ```
 python KED\PATI_5_10_TRILYON_HIZLI_UI.py          (CPU sürümü, pencereli)
 python KED_GPU\PATI_5_10_TRILYON_HIZLI_UI.py      (GPU sürümü, pencereli)
+python KED_CLANG\PATI_5_10_TRILYON_HIZLI_UI.py    (clang + GPU sürümü, pencereli)
 ```
 
 Konsol penceresi olmadan açmak için `PATI_BASLAT.pyw` dosyasını `pythonw` ile çalıştırın.
@@ -37,17 +39,18 @@ Pencerede:
 - **Başlangıç / Bitiş** aralığı elle girilir. Her aralık kendi klasörüne kaydedilir.
 - **Çekirdek (işçi)** sayısı tarama sürerken değiştirilebilir.
 - **Durdur** ile durdurulan tarama, Başlat'a basınca son kaydedilen 1 milyarlık bölümden devam eder.
+- **Bu oturumda geçen** süre canlı sayılır; **toplam çalışma süresi** tüm oturumlar boyunca checkpoint'te birikir.
 - İsteğe bağlı olarak sayaçlar her N dakikada bir maille gönderilir (`MAIL_AYARLARI.txt`, Gmail uygulama şifresi; bu dosya depoya yüklenmez).
 
-Konsol: `--konsol`, `--start`, `--end`, `--workers`, `--mail`, `--python` (C çekirdeği yerine saf Python), GPU sürümünde `--gpusuz`.
+Konsol: `--konsol`, `--start`, `--end`, `--workers`, `--mail`, `--python` (C çekirdeği yerine saf Python), GPU'lu sürümlerde `--gpusuz`.
 
-C çekirdeğini yeniden derlemek için: `derle.bat` (Visual Studio 2022 Build Tools).
+C çekirdeğini yeniden derlemek için: `derle.bat` (Visual Studio 2022 Build Tools; `KED_CLANG` için ayrıca LLVM 23).
 
 ## Sonuç dosyaları
 
 ```
 PATI_TARAMALAR\ARALIK_5.000.000.000.000_10.000.000.000.000\
-  SAYACLAR.txt          P1 … P20, P21+, döngü, asal toplamı (okunur özet)
+  SAYACLAR.txt          P1 … P20, P21+, döngü, asal toplamı, toplam çalışma süresi (okunur özet)
   PATI_CHECKPOINT.txt   kaldığı yer + sayaçlar + son bölümün SHA256 doğrulaması
   CALISMA_GUNLUGU.txt   oturumlar, işçi değişiklikleri
   P6\ P7\ … P20\ P21_PLUS\ DONGU\   her 1 milyarlık bölüm için bir dosya (hizalı tablo)
@@ -66,8 +69,12 @@ Asallık testi 64 bit için kesin (7 tabanlı Miller–Rabin). KED değeri 64 bi
 |---|---|---|---|
 | Orijinal (tek çekirdek, Python) | 1 | 6 milyon | ~9,7 gün |
 | Python, çok işlem | 24 | 127 milyon | ~11 saat |
-| C çekirdeği (`KED`) | 24 | 3,46 milyar | ~24 dk |
-| C + GPU (`KED_GPU`) | 28 | 5,65 milyar | ~15 dk |
+| C çekirdeği (`KED`, MSVC) | 24 | 3,52 milyar | ~24 dk |
+| C (clang `-O2`, `KED_CLANG --gpusuz`) | 24 | 3,35 milyar | ~25 dk |
+| C + GPU (`KED_GPU`) | 28 | 5,70 milyar | ~15 dk |
+| clang + GPU (`KED_CLANG`) | 28 | 5,44 milyar | ~15 dk |
+
+Bu programda clang, MSVC'den biraz yavaş kod üretti (`-O3`, `-march=native` denendi, daha da yavaş). Önerilen sürüm `KED_GPU`.
 
 ## Sonuçlar
 

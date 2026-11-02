@@ -1,0 +1,35 @@
+PATI KED TARAMASI - SAYACLAR (kaydedilmis)
+============================================
+Aralik            : 10.000.000.000.000 - 100.000.000.000.000
+Taranan sinir     : 10.816.000.000.000  (%0.907)
+Durum             : devam ediyor / durduruldu
+Tarama baslangici : 02.11.2026 17:56:31
+Tarama bitisi     : -
+Dosya guncellendi : 02.11.2026 17:59:36
+
+Zincir uzunluklari (tam uzunluk):
+  P1    =         24.965.184.866
+  P2    =          2.074.274.082
+  P3    =            169.979.160
+  P4    =             13.602.503
+  P5    =              1.048.946
+  P6    =                 78.364
+  P7    =                  5.711
+  P8    =                    401
+  P9    =                     23
+  P10   =                      0
+  P11   =                      0
+  P12   =                      0
+  P13   =                      0
+  P14   =                      0
+  P15   =                      0
+  P16   =                      0
+  P17   =                      0
+  P18   =                      0
+  P19   =                      0
+  P20   =                      0
+  P21+  =                      0
+
+  Dongu                 =                      0
+  Asal toplami          =         27.224.174.056
+  64 bit ustu MR testi  =                      0
