@@ -174,11 +174,15 @@ def zinciri_incele(p1, n=None):
 
 
 def elekteki_asallar(alt, ust, temel_asallar):
+    """Elek yalniz tek sayilara bakar; 2 araliktaysa basa eklenir, 1 atlanir (ked_cekirdek.c ile ayni)."""
     ilk_tek = alt | 1
+    iki = (2,) if alt <= 2 < ust else ()
     adet = max(0, (ust - ilk_tek + 1) // 2)
     if adet == 0:
-        return iter(())
+        return iter(iki)
     elek = bytearray(b'\x01') * adet
+    if ilk_tek == 1:
+        elek[0] = 0
     for p in temel_asallar:
         if p*p >= ust:
             break
@@ -190,7 +194,7 @@ def elekteki_asallar(alt, ust, temel_asallar):
         konum = (first - ilk_tek)//2
         kac = (adet - 1 - konum)//p + 1
         elek[konum::p] = b'\x00' * kac
-    return itertools.compress(range(ilk_tek, ilk_tek + 2*adet, 2), elek)
+    return itertools.chain(iki, itertools.compress(range(ilk_tek, ilk_tek + 2*adet, 2), elek))
 
 
 def atomic_txt(path, metin):
@@ -406,8 +410,8 @@ def sayi_oku(metin):
 
 
 def aralik_hatasi(start, end):
-    if start < 3:
-        return 'Başlangıç en az 3 olmalı.'
+    if start < 1:
+        return 'Başlangıç en az 1 olmalı.'
     if start >= end:
         return 'Bitiş, başlangıçtan büyük olmalı.'
     if end > MAKS_BITIS:

@@ -175,7 +175,38 @@ static int zincir(uint64_t p1, uint64_t *z, int *durum)
     }
 }
 
+/* Bir asalin zincir sonucunu sayaclara ve ciktiya ekler (ked_aralik ve ked_aralik_gpu ortak).
+ * Donus: 0 tamam, -1 cikti kapasitesi yetmedi. */
+static int kaydet(uint64_t p1, int durum, int uz, const uint64_t *z, uint64_t *sayac, uint64_t *cikti,
+                  int64_t kapasite, int64_t *yer)
+{
+    if (durum == PYTHONA) {
+        if (*yer + 3 > kapasite)
+            return -1;
+        cikti[(*yer)++] = p1;
+        cikti[(*yer)++] = PYTHONA;
+        cikti[(*yer)++] = 0;
+        return 0;
+    }
+    sayac[SON_TAM + 2]++;
+    if (durum == DONGU)
+        sayac[SON_TAM + 3]++;
+    else
+        sayac[uz <= SON_TAM ? uz : SON_TAM + 1]++;
+    if (uz >= 6 || durum == DONGU) {
+        if (*yer + 3 + uz > kapasite)
+            return -1;
+        cikti[(*yer)++] = p1;
+        cikti[(*yer)++] = (uint64_t)durum;
+        cikti[(*yer)++] = (uint64_t)uz;
+        for (int k = 0; k < uz; k++)
+            cikti[(*yer)++] = z[k];
+    }
+    return 0;
+}
+
 /* [alt, ust) araligini 'blok' boyutlu elek bloklariyla tarar (Python surumundeki bloklarla ayni).
+ * Kucuk baslangiclar: elek yalniz tek sayilara bakar; 2 blogun basinda ayrica eklenir, 1 atlanir.
  * sayac[1..SON_TAM]: tam uzunluk, sayac[SON_TAM+1]: P21+ (indeks 0 kullanilmaz);
  * sayac[SON_TAM+2]: asal toplami; sayac[SON_TAM+3]: dongu.
  * cikti: P6+, dongu ve Python'a birakilan her asal icin sirayla [p1, durum, uzunluk, zincir...].
@@ -192,10 +223,19 @@ DISA int ked_aralik(uint64_t alt, uint64_t ust, uint64_t blok, const uint32_t *t
     for (uint64_t sa = alt; sa < ust; sa += blok) {
         uint64_t su = sa + blok < ust ? sa + blok : ust;
         uint64_t ilk = sa | 1;
+        if (sa <= 2 && su > 2) {
+            int durum, uz = zincir(2, z, &durum);
+            if (kaydet(2, durum, uz, z, sayac, cikti, kapasite, &yer)) {
+                free(elek);
+                return -1;
+            }
+        }
         if (su <= ilk)
             continue;
         uint64_t adet = (su - ilk + 1) / 2;
         memset(elek, 1, (size_t)adet);
+        if (ilk == 1)
+            elek[0] = 0; /* 1 asal degil */
         for (int64_t j = 0; j < taban_adet; j++) {
             uint64_t p = taban[j], pp = p * p;
             if (pp >= su)
@@ -215,31 +255,9 @@ DISA int ked_aralik(uint64_t alt, uint64_t ust, uint64_t blok, const uint32_t *t
                 continue;
             uint64_t p1 = ilk + 2 * i;
             int durum, uz = zincir(p1, z, &durum);
-            if (durum == PYTHONA) {
-                if (yer + 3 > kapasite) {
-                    free(elek);
-                    return -1;
-                }
-                cikti[yer++] = p1;
-                cikti[yer++] = PYTHONA;
-                cikti[yer++] = 0;
-                continue;
-            }
-            sayac[SON_TAM + 2]++;
-            if (durum == DONGU)
-                sayac[SON_TAM + 3]++;
-            else
-                sayac[uz <= SON_TAM ? uz : SON_TAM + 1]++;
-            if (uz >= 6 || durum == DONGU) {
-                if (yer + 3 + uz > kapasite) {
-                    free(elek);
-                    return -1;
-                }
-                cikti[yer++] = p1;
-                cikti[yer++] = (uint64_t)durum;
-                cikti[yer++] = (uint64_t)uz;
-                for (int k = 0; k < uz; k++)
-                    cikti[yer++] = z[k];
+            if (kaydet(p1, durum, uz, z, sayac, cikti, kapasite, &yer)) {
+                free(elek);
+                return -1;
             }
         }
     }
@@ -456,10 +474,14 @@ DISA int ked_aralik_gpu(uint64_t alt, uint64_t ust, uint64_t blok, const uint32_
     for (uint64_t sa = alt; sa < ust; sa += blok) {
         uint64_t su = sa + blok < ust ? sa + blok : ust;
         uint64_t ilk = sa | 1;
+        if (sa <= 2 && su > 2)
+            asallar[adet++] = 2; /* ilk blok: adet == 0 < asal_kap */
         if (su <= ilk)
             continue;
         uint64_t adet_b = (su - ilk + 1) / 2;
         memset(elek, 1, (size_t)adet_b);
+        if (ilk == 1)
+            elek[0] = 0; /* 1 asal degil */
         for (int64_t j = 0; j < taban_adet; j++) {
             uint64_t p = taban[j], pp = p * p;
             if (pp >= su)
@@ -526,31 +548,9 @@ DISA int ked_aralik_gpu(uint64_t alt, uint64_t ust, uint64_t blok, const uint32_
             }
         } else
             uz = zincir(p1, z, &durum);
-        if (durum == PYTHONA) {
-            if (yer + 3 > kapasite) {
-                sonuc = -1;
-                goto bitir;
-            }
-            cikti[yer++] = p1;
-            cikti[yer++] = PYTHONA;
-            cikti[yer++] = 0;
-            continue;
-        }
-        sayac[SON_TAM + 2]++;
-        if (durum == DONGU)
-            sayac[SON_TAM + 3]++;
-        else
-            sayac[uz <= SON_TAM ? uz : SON_TAM + 1]++;
-        if (uz >= 6 || durum == DONGU) {
-            if (yer + 3 + uz > kapasite) {
-                sonuc = -1;
-                goto bitir;
-            }
-            cikti[yer++] = p1;
-            cikti[yer++] = (uint64_t)durum;
-            cikti[yer++] = (uint64_t)uz;
-            for (int k = 0; k < uz; k++)
-                cikti[yer++] = z[k];
+        if (kaydet(p1, durum, uz, z, sayac, cikti, kapasite, &yer)) {
+            sonuc = -1;
+            goto bitir;
         }
     }
     *cikti_uz = yer;
