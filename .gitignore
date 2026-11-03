@@ -1,5 +1,7 @@
 # Kisisel ayarlar: Gmail uygulama sifresi icerir, ASLA yuklenmez
 MAIL_AYARLARI.txt
+# Bu bilgisayara ozel sicaklik hedefleri
+AYARLAR.txt
 
 # Python / derleme artiklari
 __pycache__/

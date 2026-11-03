@@ -296,6 +296,7 @@ static cl_kernel g_cek[GPU_YUVA];
 static cl_mem g_ked5, g_ters, g_sinir, g_asal[GPU_YUVA], g_son[GPU_YUVA];
 static size_t g_kapasite[GPU_YUVA];
 static volatile LONG64 g_gpu_asal = 0, g_cpu_asal = 0;
+static volatile LONG g_yuva_sinir = GPU_YUVA; /* sicaklik denetimi icin; 0 = GPU kullanilmaz */
 
 static int opencl_yukle(void)
 {
@@ -395,6 +396,12 @@ DISA void ked_gpu_istatistik(uint64_t *gpu, uint64_t *cpu)
     *cpu = (uint64_t)g_cpu_asal;
 }
 
+/* Ayni anda kullanilacak GPU yuvasi sayisi (0..GPU_YUVA); calisirken degistirilebilir, sonuclari etkilemez. */
+DISA void ked_gpu_yuva_ayarla(int n)
+{
+    InterlockedExchange(&g_yuva_sinir, n < 0 ? 0 : n > GPU_YUVA ? GPU_YUVA : n);
+}
+
 /* Kilit tutulurken cagrilir. 0 = basarili. */
 static int gpu_zincirle(int y, const uint64_t *asallar, int64_t adet, uint16_t *kod)
 {
@@ -483,7 +490,8 @@ DISA int ked_aralik_gpu(uint64_t alt, uint64_t ust, uint64_t blok, const uint32_
     }
 
     /* 2) GPU bossa zincirleri orada hesapla. */
-    for (int y = 0; gpu_hazir && adet && y < GPU_YUVA; y++) {
+    int yuva_sinir = (int)g_yuva_sinir;
+    for (int y = 0; gpu_hazir && adet && y < yuva_sinir; y++) {
         if (!TryEnterCriticalSection(&gpu_kilit[y]))
             continue;
         kod = (uint16_t *)malloc(sizeof(uint16_t) * (size_t)adet);

@@ -12,6 +12,9 @@ yoksa (veya --python ile) Python islemleriyle. Sonuc dosyalari iki durumda da ay
 Konsol penceresi olmadan acmak icin: PATI_BASLAT.pyw
 Tarama baslama/bitis tarihleri checkpoint'e, her oturum CALISMA_GUNLUGU.txt dosyasina yazilir.
 Pencere yerine konsolda calistirmak icin: --konsol
+Ayarlar dugmesi: CPU/GPU hedef sicakligi; acikken isci sayisi ve GPU kullanimi bu hedefleri
+asmayacak sekilde otomatik ayarlanir (ayarlar AYARLAR.txt). CPU sicakligi icin LibreHardwareMonitor
+yonetici olarak acik ve web sunucusu (Options > Remote Web Server > Run) calisiyor olmali.
 """
 import argparse
 import collections
@@ -24,6 +27,7 @@ import multiprocessing as mp
 import os
 from pathlib import Path
 import queue
+import re
 import signal
 import sys
 import threading
@@ -521,6 +525,12 @@ def gpu_istatistik():
     return g.value, c.value
 
 
+def gpu_yuva_ayarla(n):
+    """Ayni anda kullanilacak GPU yuvasi (0..GPU_YUVA; 0 = GPU kullanilmaz). Sonuclari degistirmez."""
+    if _c is not None and hasattr(_c, 'ked_gpu_yuva_ayarla'):
+        _c.ked_gpu_yuva_ayarla(int(n))
+
+
 def c_hazirla(end, block, gpu_ile):
     global _c_taban, _c_blok, _c_fonk
     import ctypes
@@ -578,7 +588,8 @@ def blok_isle_c(aralik):
 
 # ---------------------------------------------------------------- tarama
 
-GPU_EK_ISCI = 4  # GPU'yu bekleyen is parcaciklarini telafi eder (ked_cekirdek.c GPU_YUVA)
+GPU_YUVA = 4  # ked_cekirdek.c GPU_YUVA
+GPU_EK_ISCI = GPU_YUVA  # GPU'yu bekleyen is parcaciklarini telafi eder
 
 
 def maks_isci():
@@ -993,6 +1004,170 @@ class MailBildirici:
             t.join(45)
 
 
+# ---------------------------------------------------------------- sicaklik denetimi
+
+AYAR_DOSYASI = 'AYARLAR.txt'
+AYAR_VARSAYILAN = {'sicaklik_denetimi': 0, 'cpu_hedef': 85, 'gpu_hedef': 75, 'en_az_isci': 4, 'kontrol_sn': 10}
+AYAR_SINIRLARI = {'sicaklik_denetimi': (0, 1), 'cpu_hedef': (40, 100), 'gpu_hedef': (40, 90),
+                  'en_az_isci': (1, 64), 'kontrol_sn': (3, 300)}
+SICAKLIK_ADRESI = 'http://localhost:8085/data.json'  # LibreHardwareMonitor web sunucusu
+SICAKLIK_PAYI = 3  # hedefin bu kadar derece altina inince isci/GPU yeniden artirilir
+SICAKLIK_OLCUM_SN = 2
+
+
+def ayar_yolu():
+    return Path(__file__).resolve().parent/AYAR_DOSYASI
+
+
+def ayarlari_oku():
+    """AYARLAR.txt'yi okur; eksik ya da hatali degerler varsayilanla, sinir disindakiler sinirla degisir."""
+    ayar = dict(AYAR_VARSAYILAN)
+    yol = ayar_yolu()
+    if yol.is_file():
+        for satir in yol.read_text(encoding='utf-8').splitlines():
+            satir = satir.strip()
+            if satir and not satir.startswith('#') and '=' in satir:
+                k, v = (x.strip() for x in satir.split('=', 1))
+                if k in ayar:
+                    try:
+                        ayar[k] = int(float(v.replace(',', '.')))
+                    except ValueError:
+                        pass
+    for k, (en_az, en_cok) in AYAR_SINIRLARI.items():
+        ayar[k] = min(en_cok, max(en_az, ayar[k]))
+    return ayar
+
+
+def ayarlari_yaz(ayar):
+    atomic_txt(ayar_yolu(), '# PATI KED ayarlari (pencerede Ayarlar dugmesiyle degistirilir)\n'
+               + ''.join('%s = %s\n' % (k, ayar[k]) for k in AYAR_VARSAYILAN))
+
+
+def _derece(metin):
+    m = re.search(r'-?\d+(?:[.,]\d+)?', str(metin or ''))
+    return float(m.group().replace(',', '.')) if m else None
+
+
+def sicakliklari_oku():
+    """(cpu, gpu) derece; okunamayan None. Ikisi de LibreHardwareMonitor'un yerel web sunucusundan,
+    o kapaliysa GPU nvidia-smi ile okunur (Windows CPU sicakligini kendisi vermiyor)."""
+    cpu = gpu = cekirdek_maks = None
+    try:
+        import json
+        import urllib.request
+        with urllib.request.urlopen(SICAKLIK_ADRESI, timeout=2) as yanit:
+            yigin = [(json.load(yanit), '')]
+        while yigin:
+            dugum, ust = yigin.pop()
+            ad = dugum.get('Text', '')
+            if ust == 'Temperatures':
+                if ad == 'CPU Package' and cpu is None:
+                    cpu = _derece(dugum.get('Value'))
+                elif ad == 'Core Max' and cekirdek_maks is None:
+                    cekirdek_maks = _derece(dugum.get('Value'))
+                elif ad == 'GPU Core' and gpu is None:
+                    gpu = _derece(dugum.get('Value'))
+            yigin.extend((c, ad) for c in dugum.get('Children') or ())
+    except Exception:
+        pass
+    if gpu is None:
+        try:
+            import subprocess
+            r = subprocess.run(['nvidia-smi', '--query-gpu=temperature.gpu', '--format=csv,noheader,nounits'],
+                               capture_output=True, text=True, timeout=5,
+                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            gpu = _derece(r.stdout.splitlines()[0]) if r.returncode == 0 and r.stdout.strip() else None
+        except Exception:
+            pass
+    return (cpu if cpu is not None else cekirdek_maks), gpu
+
+
+class SicaklikDenetleyici:
+    """Isci sayisini CPU sicakligina, GPU yuva sayisini GPU sicakligina gore ayarlar: olcumlerin
+    ortalamasi hedefi asinca azaltir, hedefin SICAKLIK_PAYI altina inince birer birer geri artirir.
+    CPU sicakligi okunamazsa isci sayisi GPU sicakligina gore ayarlanir.
+    Isci ust siniri kullanicinin sectigi sayidir. Sonuclar degismez, yalniz hiz degisir.
+    GPU daha yavas isinip soguydugu icin GPU karari CPU'nunkinin 3 kati aralikla verilir."""
+
+    def __init__(self, ayar, okuyucu=sicakliklari_oku, yuva_ayarla=gpu_yuva_ayarla):
+        self.ayar, self.okuyucu, self.yuva_ayarla = dict(ayar), okuyucu, yuva_ayarla
+        self.isci = None  # None = denetim isciye karismiyor
+        self.yuva = GPU_YUVA
+        self.cpu = self.gpu = None
+        self.cpu_olcum, self.gpu_olcum = [], []
+        self.son_cpu = self.son_gpu = time.monotonic()
+
+    def acik(self):
+        return bool(self.ayar['sicaklik_denetimi'])
+
+    def ayar_degisti(self, ayar):
+        self.ayar = dict(ayar)
+        if not self.acik():
+            self.birak()
+
+    def birak(self):
+        """Denetim kapaninca isci kullanicinin degerine, GPU tam kullanima doner."""
+        self.isci = None
+        if self.yuva != GPU_YUVA:
+            self.yuva = GPU_YUVA
+            self.yuva_ayarla(GPU_YUVA)
+
+    def istenen(self, ust):
+        """Taramanin kullanacagi isci sayisi (ust = kullanicinin sectigi)."""
+        if not self.acik() or self.isci is None:
+            return ust
+        return min(ust, max(self.isci, self.ayar['en_az_isci']))
+
+    def olc(self):
+        self.cpu, self.gpu = self.okuyucu()
+        if self.cpu is not None:
+            self.cpu_olcum.append(self.cpu)
+        if self.gpu is not None:
+            self.gpu_olcum.append(self.gpu)
+
+    def karar(self, ust, simdiki=None):
+        """Calisan taramada son olcumlere gore isci/GPU yuvasini ayarlar. Degisiklik metinleri listesi doner."""
+        simdiki = time.monotonic() if simdiki is None else simdiki
+        if not self.acik():
+            return []
+        a, mesajlar = self.ayar, []
+        en_az = min(a['en_az_isci'], ust)
+        if self.isci is None:
+            self.isci = ust
+        self.isci = max(en_az, min(ust, self.isci))
+        if simdiki - self.son_cpu >= a['kontrol_sn']:
+            self.son_cpu = simdiki
+            # CPU sicakligi okunamazsa isci sayisi GPU sicakligina (GPU hedefiyle) gore ayarlanir.
+            if self.cpu_olcum:
+                olcum, hedef, ad = self.cpu_olcum, a['cpu_hedef'], 'CPU'
+            else:
+                olcum, hedef, ad = self.gpu_olcum, a['gpu_hedef'], 'GPU (CPU okunamadı)'
+            if olcum:
+                t = sum(olcum) / len(olcum)
+                eski = self.isci
+                if t > hedef:
+                    self.isci = max(en_az, self.isci - min(4, 1 + int((t - hedef) // 3)))
+                elif t < hedef - SICAKLIK_PAYI:
+                    self.isci = min(ust, self.isci + 1)
+                if self.isci != eski:
+                    mesajlar.append('%s ort. %.0f °C (hedef %d) -> işçi %d -> %d' % (ad, t, hedef, eski, self.isci))
+            self.cpu_olcum = []
+        if simdiki - self.son_gpu >= 3 * a['kontrol_sn']:
+            self.son_gpu = simdiki
+            if self.gpu_olcum:
+                t = sum(self.gpu_olcum) / len(self.gpu_olcum)
+                eski = self.yuva
+                if t > a['gpu_hedef']:
+                    self.yuva = max(0, self.yuva - 1)
+                elif t < a['gpu_hedef'] - SICAKLIK_PAYI:
+                    self.yuva = min(GPU_YUVA, self.yuva + 1)
+                if self.yuva != eski:
+                    self.yuva_ayarla(self.yuva)
+                    mesajlar.append('GPU ort. %.0f °C (hedef %d) -> GPU yuvası %d -> %d' % (t, a['gpu_hedef'], eski, self.yuva))
+            self.gpu_olcum = []
+        return mesajlar
+
+
 # ---------------------------------------------------------------- konsol
 
 def konsol_calistir(a):
@@ -1139,6 +1314,8 @@ def pencere_calistir(a):
     baslat_dugme.pack(side='left')
     durdur_dugme = ttk.Button(ust, text='■ Durdur', width=12, state='disabled')
     durdur_dugme.pack(side='left', padx=6)
+    ayar_dugme = ttk.Button(ust, text='⚙ Ayarlar')
+    ayar_dugme.pack(side='right', padx=(6, 0))
     ttk.Button(ust, text='Sonuç klasörünü aç',
                command=lambda: (secili['output'].mkdir(parents=True, exist_ok=True),
                                 os.startfile(secili['output']))).pack(side='right')
@@ -1224,7 +1401,8 @@ def pencere_calistir(a):
             ('kalan', 'Kalan süre'), ('tahmini', 'Tahmini bitiş'),
             ('baslama', 'Tarama başlangıcı'), ('oturum', 'Bu oturum başlangıcı'),
             ('bitis', 'Tarama bitişi'), ('oturum_sure', 'Bu oturumda geçen'),
-            ('toplam_sure', 'Toplam çalışma süresi'))):
+            ('toplam_sure', 'Toplam çalışma süresi'), ('sicaklik', 'Sıcaklık'),
+            ('denetim', 'Sıcaklık denetimi'))):
         ttk.Label(bilgi, text=baslik + ':', style='Baslik.TLabel').grid(row=satir, column=0, sticky='w', pady=1)
         etiket = ttk.Label(bilgi, text='-', style='Deger.TLabel')
         etiket.grid(row=satir, column=1, sticky='w', padx=(10, 0), pady=1)
@@ -1376,7 +1554,7 @@ def pencere_calistir(a):
         def calis():
             try:
                 tara(t_bas, t_bit, a.block, a.chunk, cikti, a.show_min, a.cooldown,
-                     lambda: isci_durum['n'], bildirici, dur, a.python,
+                     lambda: denetleyici.istenen(isci_durum['n']), bildirici, dur, a.python,
                      gpu_var.get())
             except Exception as e:
                 olaylar.put(('hata', str(e)))
@@ -1412,7 +1590,8 @@ def pencere_calistir(a):
                         veri['oturum_baslama'], f'{veri["d"]["tamamlanan_sinir"]:,}', veri['isci'], veri['motor']))
                 elif tur == 'isci':
                     bilgi_alanlari['isci'].configure(text=str(veri['yeni']))
-                    kayda_ekle('%s | İşçi sayısı %d -> %d' % (simdi(), veri['eski'], veri['yeni']))
+                    kayda_ekle('%s | İşçi sayısı %d -> %d%s' % (simdi(), veri['eski'], veri['yeni'],
+                               ' (sıcaklık denetimi)' if denetleyici.isci is not None else ''))
                 elif tur == 'ilerleme':
                     ilerleme_goster(veri)
                 elif tur == 'kayit':
@@ -1421,6 +1600,10 @@ def pencere_calistir(a):
                     durum_cubugu.configure(text='Kaydedildi: %s  (%s)' % (f'{veri["d"]["tamamlanan_sinir"]:,}', simdi()))
                 elif tur == 'zincir':
                     kayda_ekle(veri)
+                elif tur == 'sicaklik':
+                    sicaklik_goster()
+                elif tur == 'denetim':
+                    kayda_ekle('%s | Sıcaklık denetimi: %s' % (simdi(), veri))
                 elif tur == 'mail':
                     kayda_ekle('%s | %s' % (simdi(), veri))
                     mail_durum.configure(text=veri[:90])
@@ -1502,6 +1685,95 @@ def pencere_calistir(a):
 
         threading.Thread(target=gonder, daemon=True).start()
 
+    denetleyici = SicaklikDenetleyici(ayarlari_oku())
+
+    def sicaklik_dongusu():
+        # Olcum ve karar bu is parcaciginda; ekran olaylari kuyrukla guncellenir.
+        while True:
+            try:
+                denetleyici.olc()
+                if durum['calisiyor']:
+                    for m in denetleyici.karar(isci_durum['n']):
+                        olaylar.put(('denetim', m))
+                elif denetleyici.acik():
+                    denetleyici.cpu_olcum, denetleyici.gpu_olcum = [], []
+                olaylar.put(('sicaklik', None))
+            except Exception as e:
+                olaylar.put(('denetim', 'hata: %s' % e))
+            time.sleep(SICAKLIK_OLCUM_SN)
+
+    def sicaklik_goster():
+        c, g = denetleyici.cpu, denetleyici.gpu
+        bilgi_alanlari['sicaklik'].configure(text='CPU %s  |  GPU %s' % (
+            ('%.0f °C' % c) if c is not None else 'okunamıyor (LibreHardwareMonitor açık mı?)',
+            ('%.0f °C' % g) if g is not None else 'okunamıyor'))
+        a_ = denetleyici.ayar
+        if not denetleyici.acik():
+            metin = 'kapalı (Ayarlar)'
+        else:
+            metin = 'hedef CPU %d °C, GPU %d °C' % (a_['cpu_hedef'], a_['gpu_hedef'])
+            if durum['calisiyor']:
+                metin += ' | işçi %d/%d | GPU yuvası %d/%d' % (
+                    denetleyici.istenen(isci_durum['n']), isci_durum['n'], denetleyici.yuva, GPU_YUVA)
+            if c is None and g is not None:
+                metin += ' | işçi GPU sıcaklığına göre'
+        bilgi_alanlari['denetim'].configure(text=metin)
+
+    def ayarlari_ac():
+        pen = tk.Toplevel(kok)
+        pen.title('Ayarlar')
+        pen.transient(kok)
+        pen.resizable(False, False)
+        cer = ttk.Frame(pen, padding=14)
+        cer.pack(fill='both', expand=True)
+        a_ = denetleyici.ayar
+        acik_var = tk.BooleanVar(value=bool(a_['sicaklik_denetimi']))
+        ttk.Checkbutton(cer, text='Sıcaklığa göre işçi sayısını ve GPU kullanımını otomatik ayarla',
+                        variable=acik_var).grid(row=0, column=0, columnspan=3, sticky='w', pady=(0, 10))
+        degiskenler = {}
+        for satir, (k, baslik, birim) in enumerate((
+                ('cpu_hedef', 'CPU hedef sıcaklığı', '°C'), ('gpu_hedef', 'GPU hedef sıcaklığı', '°C'),
+                ('en_az_isci', 'En az işçi', 'işçi'), ('kontrol_sn', 'Kontrol aralığı', 'sn')), start=1):
+            en_az, en_cok = AYAR_SINIRLARI[k]
+            degiskenler[k] = tk.StringVar(value=str(a_[k]))
+            ttk.Label(cer, text=baslik + ':').grid(row=satir, column=0, sticky='w', pady=3)
+            ttk.Spinbox(cer, from_=en_az, to=en_cok, width=6, textvariable=degiskenler[k]).grid(
+                row=satir, column=1, sticky='w', padx=8)
+            ttk.Label(cer, text='%s  (%d–%d)' % (birim, en_az, en_cok)).grid(row=satir, column=2, sticky='w')
+        ttk.Label(cer, justify='left', wraplength=440, text=(
+            'Hedef aşılınca işçi sayısı (CPU) ve aynı anda kullanılan GPU yuvası azaltılır, hedefin %d °C '
+            'altına inince yavaşça geri artırılır. Ana penceredeki işçi sayısı üst sınırdır. Sonuçlar '
+            'değişmez, yalnız hız değişir.\n\nCPU sıcaklığı LibreHardwareMonitor\'dan okunur: yönetici olarak '
+            'açık olmalı ve Options → Remote Web Server → Run işaretli olmalı. CPU sıcaklığı okunamazsa '
+            'işçi sayısı GPU sıcaklığına (GPU hedefine) göre ayarlanır; ikisi de okunamazsa değiştirilmez.'
+            % SICAKLIK_PAYI)).grid(row=5, column=0, columnspan=3, sticky='w', pady=(10, 10))
+        dugmeler_ = ttk.Frame(cer)
+        dugmeler_.grid(row=6, column=0, columnspan=3, sticky='e')
+
+        def kaydet():
+            yeni = {'sicaklik_denetimi': 1 if acik_var.get() else 0}
+            for k, v in degiskenler.items():
+                en_az, en_cok = AYAR_SINIRLARI[k]
+                try:
+                    yeni[k] = int(v.get())
+                except ValueError:
+                    yeni[k] = None
+                if yeni[k] is None or not en_az <= yeni[k] <= en_cok:
+                    messagebox.showerror('PATİ', 'Değerler belirtilen aralıklarda tam sayı olmalı.', parent=pen)
+                    return
+            ayarlari_yaz(yeni)
+            denetleyici.ayar_degisti(yeni)
+            kayda_ekle('%s | Ayarlar kaydedildi: sıcaklık denetimi %s, CPU %d °C, GPU %d °C, en az %d işçi, %d sn' % (
+                simdi(), 'açık' if yeni['sicaklik_denetimi'] else 'kapalı', yeni['cpu_hedef'], yeni['gpu_hedef'],
+                yeni['en_az_isci'], yeni['kontrol_sn']))
+            sicaklik_goster()
+            pen.destroy()
+
+        ttk.Button(dugmeler_, text='Kaydet', command=kaydet).pack(side='left')
+        ttk.Button(dugmeler_, text='İptal', command=pen.destroy).pack(side='left', padx=(6, 0))
+        pen.grab_set()
+
+    ayar_dugme.configure(command=ayarlari_ac)
     mail_test_dugme.configure(command=test_maili)
     mail_ayar_dugme.configure(command=mail_ayarlarini_ac)
     baslat_dugme.configure(command=baslat)
@@ -1532,6 +1804,8 @@ def pencere_calistir(a):
 
     kok.update_idletasks()
     kok.minsize(max(820, kok.winfo_reqwidth()), 600)
+    sicaklik_goster()
+    threading.Thread(target=sicaklik_dongusu, daemon=True).start()
     olaylari_isle()
     kok.mainloop()
 

@@ -41,6 +41,7 @@ Pencerede:
 - **Durdur** ile durdurulan tarama, Başlat'a basınca son kaydedilen 1 milyarlık bölümden devam eder.
 - **Bu oturumda geçen** süre canlı sayılır; **toplam çalışma süresi** tüm oturumlar boyunca checkpoint'te birikir.
 - İsteğe bağlı olarak sayaçlar her N dakikada bir maille gönderilir (`MAIL_AYARLARI.txt`, Gmail uygulama şifresi; bu dosya depoya yüklenmez).
+- **⚙ Ayarlar** (yalnız `KED_GPU`): CPU ve GPU hedef sıcaklığı. Denetim açıkken işçi sayısı CPU sıcaklığına, aynı anda kullanılan GPU yuvası (0–4) GPU sıcaklığına göre otomatik azaltılıp artırılır. Ana penceredeki işçi sayısı üst sınırdır. CPU sıcaklığı okunamazsa işçi sayısı GPU sıcaklığına göre ayarlanır. Sonuçlar değişmez, yalnız hız değişir. CPU sıcaklığı [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)'dan okunur: yönetici olarak açık olmalı ve *Options → Remote Web Server → Run* işaretli olmalı. Ayarlar `AYARLAR.txt` dosyasında tutulur.
 
 Konsol: `--konsol`, `--start`, `--end`, `--workers`, `--mail`, `--python` (C çekirdeği yerine saf Python), GPU'lu sürümlerde `--gpusuz`.
 
