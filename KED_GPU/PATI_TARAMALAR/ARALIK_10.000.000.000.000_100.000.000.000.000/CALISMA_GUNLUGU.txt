@@ -1,2 +1,0 @@
-02.11.2026 17:56:31 | OTURUM BASLADI | kaldigi yer 10,000,000,000,000 | isci 16 | motor C + GPU (NVIDIA RTX 2000 Ada Generation)
-02.11.2026 17:59:36 | OTURUM DURDURULDU | son kalici sinir 10,816,000,000,000
