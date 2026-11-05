@@ -230,7 +230,9 @@ class Uygulama:
         self.kuyruk = queue.Queue()
         self.dur = threading.Event()
         self.kaynaklar = []
+        self.tumu_kimlikler = set()
         self.secim = {}
+        self.tumu = tk.BooleanVar(value=False)
         self.R = None                   # analiz sonuclari (ked_analiz.analiz_et)
         self.analiz_anahtar = None      # R'nin hesaplandigi kaynak secimi
         self.analiz_calisan = None
@@ -358,12 +360,25 @@ class Uygulama:
             w.destroy()
         eski = {k: v.get() for k, v in self.secim.items()}
         self.secim = {}
+        # TUMU: tamamlanmislar, ustune bunlarla cakismayan yarim taramalar (en son sinira kadar)
+        tumu = [k for k in self.kaynaklar if k.kimlik in varsayilan]
+        for k in sorted(self.kaynaklar, key=lambda k: -(k.sinir - k.bas)):
+            if k not in tumu and not any(k.bas < s.sinir and s.bas < k.sinir for s in tumu):
+                tumu.append(k)
+        self.tumu_kimlikler = {k.kimlik for k in tumu}
+        if tumu:
+            bas = min(k.bas for k in tumu)
+            son = max(k.sinir for k in tumu)
+            ttk.Checkbutton(self.secim_cerceve, variable=self.tumu, command=self._tumu_sec,
+                            text=f"TUMU: {kv.trilyon(bas)} – {kv.trilyon(son)} "
+                                 f"(0'dan en son taranan sayiya kadar, cakismayan taramalar)"
+                            ).grid(row=0, column=0, columnspan=2, sticky="w")
         for i, k in enumerate(self.kaynaklar):
             v = tk.BooleanVar(value=eski.get(k.kimlik, k.kimlik in varsayilan))
             self.secim[k.kimlik] = v
             renk = RENKLER[i % len(RENKLER)]
             satir = ttk.Frame(self.secim_cerceve)
-            satir.grid(row=i // 2, column=i % 2, sticky="w", padx=(0, 24))
+            satir.grid(row=1 + i // 2, column=i % 2, sticky="w", padx=(0, 24))
             tk.Label(satir, bg=renk, width=2).pack(side="left", padx=(0, 4))
             ttk.Checkbutton(satir, text=k.etiket(), variable=v,
                             command=self.hepsini_ciz).pack(side="left")
@@ -373,6 +388,14 @@ class Uygulama:
         dur = self.dur
         threading.Thread(target=self._arka_plan, args=(list(self.kaynaklar), dur),
                          daemon=True).start()
+
+    def _tumu_sec(self):
+        """TUMU isaretlenince 0'dan son taramaya kadar cakismayan taramalarin hepsi secilir;
+        isaret kaldirilinca secim bosaltilir."""
+        acik = self.tumu.get()
+        for kimlik, v in self.secim.items():
+            v.set(acik and kimlik in self.tumu_kimlikler)
+        self.hepsini_ciz()
 
     def _arka_plan(self, kaynaklar, dur):
         for k in kaynaklar:
@@ -442,6 +465,8 @@ class Uygulama:
         return alinan
 
     def hepsini_ciz(self):
+        self.tumu.set(bool(self.secim) and {k for k, v in self.secim.items() if v.get()}
+                      == set(self.tumu_kimlikler))
         self.birlesik()
         self.ciz_uzunluk()
         self.ciz_yogunluk()
