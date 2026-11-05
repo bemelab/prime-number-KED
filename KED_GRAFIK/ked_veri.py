@@ -70,20 +70,29 @@ def sayaclar_oku(yol):
     return d
 
 
+def li(x):
+    """Logaritmik integral li(x), Ramanujan serisi (x >= 2)."""
+    L = math.log(x)
+    toplam, terim, ic = 0.0, 1.0, 0.0
+    for n in range(1, 400):
+        terim *= L / n                      # L^n / n!
+        if n % 2:
+            ic += 1 / n                     # sum 1/(2k+1), k <= (n-1)/2
+        parca = terim / 2 ** (n - 1) * ic
+        toplam += parca if n % 2 else -parca
+        if n > 2 * L and abs(parca) < 1e-17 * abs(toplam):
+            break
+    return 0.5772156649015329 + math.log(L) + math.sqrt(x) * toplam
+
+
 def asal_tahmini(a, b):
-    """[a, b) icindeki asal sayisi tahmini: integral dt/ln t (Simpson). 10^13 olceginde
-    gercek degerden sapma milyonda birin altindadir (Dogrulama sekmesinde gosterilir)."""
+    """[a, b) icindeki asal sayisi tahmini: li(b) - li(a) = integral dt/ln t. 10^13 olceginde
+    gercek degerden sapma milyonda birin altindadir (Dogrulama sekmesinde gosterilir).
+    Tarama 1'den baslayabilir: t < 2 bolgesinde asal yoktur (ln 1 = 0 bolmesi olmaz)."""
+    a = max(a, 2)
     if b <= a:
         return 0.0
-    parca = 10 ** 12
-    if b - a > parca:
-        return sum(asal_tahmini(x, min(x + parca, b)) for x in range(a, b, parca))
-    n = 16
-    h = (b - a) / n
-    s = 1 / math.log(a) + 1 / math.log(b)
-    for i in range(1, n):
-        s += (4 if i % 2 else 2) / math.log(a + i * h)
-    return s * h / 3
+    return li(b) - li(a)
 
 
 class Kaynak:
