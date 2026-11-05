@@ -24,6 +24,16 @@ VARYANT_RENK = ["#999999", "#2a6fdb", "#1a9e5c", "#e0612b", "#6b4fd8"]
 UST = str.maketrans("0123456789-", "⁰¹²³⁴⁵⁶⁷⁸⁹⁻")
 
 
+def sira_rengi(t):
+    """0..1 -> maviden (sayi dogrusunun basi) kirmiziya (sonu) renk."""
+    duraklar = [(42, 111, 219), (26, 158, 92), (201, 164, 0), (212, 61, 81)]
+    t = min(max(t, 0.0), 1.0) * (len(duraklar) - 1)
+    i = min(int(t), len(duraklar) - 2)
+    f = t - i
+    a, b = duraklar[i], duraklar[i + 1]
+    return "#%02x%02x%02x" % tuple(round(x + (y - x) * f) for x, y in zip(a, b))
+
+
 def sayi_yaz(v):
     if v == 0:
         return "0"
@@ -148,7 +158,7 @@ class Grafik(tk.Canvas):
     # ---------------------------------------------------- cizim turleri
     def cubuklar(self, baslik, kategoriler, seriler, ylog=True, ybaslik="", etiket=True):
         """seriler: [(ad, renk, [deger...])]"""
-        degerler = [v for _, _, ds in seriler for v in ds if v > 0]
+        degerler = [v for _, _, ds in seriler for v in ds if v and v > 0]
         if not degerler:
             return self.bos("Gosterilecek veri yok")
         x0, x1, y0, y1, Y = self.cerceve(baslik, ylog, min(degerler), max(degerler), ybaslik)
@@ -161,10 +171,11 @@ class Grafik(tk.Canvas):
             for j, (ad, renk, ds) in enumerate(seriler):
                 v = ds[i]
                 bx = gx + j * gen
-                if v > 0:
+                if v and v > 0:
                     yt = Y(v)
                     self.create_rectangle(bx, yt, bx + gen - 1, y1, fill=renk, outline="")
-                    self.noktalar.append((bx + gen / 2, yt, f"{ad} · {kat}: {sayi_yaz(v)}"))
+                    self.noktalar.append((bx + gen / 2, yt,
+                                          f"{ad.lstrip('_')} · {kat}: {sayi_yaz(v)}"))
                     if etiket and gen >= 30:
                         self.create_text(bx + gen / 2, yt - 3, text=sayi_yaz(v), anchor="s",
                                          font=("Segoe UI", 7), angle=0 if gen >= 70 else 90)
@@ -172,7 +183,7 @@ class Grafik(tk.Canvas):
                     self.create_text(bx + gen / 2, y1 - 3, text="0", anchor="s",
                                      font=("Segoe UI", 7), fill="#999")
         if m > 1:
-            self.gosterge([(a, r) for a, r, _ in seriler], x1, y0)
+            self.gosterge([(a, r) for a, r, _ in seriler if not a.startswith("_")], x1, y0)
 
     def cizgiler(self, baslik, seriler, ylog=True, ybaslik="", xbaslik="", xmin=None, xmax=None,
                  xetiket=sayi_yaz, isaretler=(), kategorik=None):
@@ -212,7 +223,7 @@ class Grafik(tk.Canvas):
                     self.create_oval(p[0] - 3, p[1] - 3, p[0] + 3, p[1] + 3, fill=renk,
                                      outline="")
                 self.noktalar.append((p[0], p[1], ipuclari[i] if ipuclari else
-                                      f"{ad}: {sayi_yaz(v)}"))
+                                      f"{ad.lstrip('_')}: {sayi_yaz(v)}"))
                 onceki = p
         for x, renk, metin in isaretler:
             px = X(x)
@@ -230,9 +241,11 @@ class Uygulama:
         self.kuyruk = queue.Queue()
         self.dur = threading.Event()
         self.kaynaklar = []
-        self.tumu_kimlikler = set()
         self.secim = {}
-        self.tumu = tk.BooleanVar(value=False)
+        self.secim_dugmeleri = []
+        self.tum = []                   # 0'dan en son taranan sayiya kadar kullanilan taramalar
+        self.son = 0                    # en son taranan sayi
+        self._aralik_onbellek = (None, [], None)
         self.R = None                   # analiz sonuclari (ked_analiz.analiz_et)
         self.analiz_anahtar = None      # R'nin hesaplandigi kaynak secimi
         self.analiz_calisan = None
@@ -244,6 +257,30 @@ class Uygulama:
                   font=("Segoe UI", 9, "bold")).pack(anchor="w")
         self.secim_cerceve = ttk.Frame(ust)
         self.secim_cerceve.pack(fill="x")
+        ar = ttk.Frame(ust)
+        ar.pack(fill="x", pady=(4, 0))
+        self.a_acik = tk.BooleanVar(value=False)
+        self.a_bas = tk.StringVar(value="0")
+        self.a_bit = tk.StringVar(value="")
+        self.a_gen = tk.StringVar(value="10")
+        self.a_dugme = ttk.Checkbutton(ar, text="Tum aralik:", variable=self.a_acik,
+                                       command=self.hepsini_ciz)
+        self.a_dugme.pack(side="left")
+        for deg, sonra in ((self.a_bas, "T  –"), (self.a_bit, "T")):
+            e = ttk.Entry(ar, textvariable=deg, width=7, justify="right")
+            e.pack(side="left", padx=(4, 2))
+            e.bind("<Return>", lambda e: self.hepsini_ciz())
+            ttk.Label(ar, text=sonra).pack(side="left")
+        ttk.Label(ar, text="     aralik genisligi:").pack(side="left")
+        cb = ttk.Combobox(ar, textvariable=self.a_gen, width=7, justify="right",
+                          values=["bolme", "1", "5", "10", "25", "50", "100", "250"])
+        cb.pack(side="left", padx=(4, 2))
+        cb.bind("<<ComboboxSelected>>", lambda e: self.hepsini_ciz())
+        cb.bind("<Return>", lambda e: self.hepsini_ciz())
+        ttk.Label(ar, text="T").pack(side="left")
+        ttk.Button(ar, text="Uygula", command=self.hepsini_ciz).pack(side="left", padx=8)
+        self.a_bilgi = ttk.Label(ar, text="", foreground="#555")
+        self.a_bilgi.pack(side="left", padx=4)
         satir = ttk.Frame(ust)
         satir.pack(fill="x", pady=(4, 0))
         ttk.Button(satir, text="Yeniden tara (diskten oku)", command=self.yukle).pack(side="left")
@@ -360,42 +397,28 @@ class Uygulama:
             w.destroy()
         eski = {k: v.get() for k, v in self.secim.items()}
         self.secim = {}
-        # TUMU: tamamlanmislar, ustune bunlarla cakismayan yarim taramalar (en son sinira kadar)
-        tumu = [k for k in self.kaynaklar if k.kimlik in varsayilan]
-        for k in sorted(self.kaynaklar, key=lambda k: -(k.sinir - k.bas)):
-            if k not in tumu and not any(k.bas < s.sinir and s.bas < k.sinir for s in tumu):
-                tumu.append(k)
-        self.tumu_kimlikler = {k.kimlik for k in tumu}
-        if tumu:
-            bas = min(k.bas for k in tumu)
-            son = max(k.sinir for k in tumu)
-            ttk.Checkbutton(self.secim_cerceve, variable=self.tumu, command=self._tumu_sec,
-                            text=f"TUMU: {kv.trilyon(bas)} – {kv.trilyon(son)} "
-                                 f"(0'dan en son taranan sayiya kadar, cakismayan taramalar)"
-                            ).grid(row=0, column=0, columnspan=2, sticky="w")
+        self.tum = kv.tum_kapsam(self.kaynaklar)
+        eski_son, self.son = self.son, max((k.sinir for k in self.tum), default=0)
+        if not self.a_bit.get().strip() or self.a_bit.get() == self._t_yaz(eski_son):
+            self.a_bit.set(self._t_yaz(self.son))     # kullanici degistirmediyse en son sinir
+        self.a_dugme.config(text=f"Tum aralik (en son taranan: {kv.trilyon(self.son)}):")
+        self.secim_dugmeleri = []
         for i, k in enumerate(self.kaynaklar):
             v = tk.BooleanVar(value=eski.get(k.kimlik, k.kimlik in varsayilan))
             self.secim[k.kimlik] = v
             renk = RENKLER[i % len(RENKLER)]
             satir = ttk.Frame(self.secim_cerceve)
-            satir.grid(row=1 + i // 2, column=i % 2, sticky="w", padx=(0, 24))
+            satir.grid(row=i // 2, column=i % 2, sticky="w", padx=(0, 24))
             tk.Label(satir, bg=renk, width=2).pack(side="left", padx=(0, 4))
-            ttk.Checkbutton(satir, text=k.etiket(), variable=v,
-                            command=self.hepsini_ciz).pack(side="left")
+            d = ttk.Checkbutton(satir, text=k.etiket(), variable=v, command=self.hepsini_ciz)
+            d.pack(side="left")
+            self.secim_dugmeleri.append(d)
         for i, k in enumerate(self.kaynaklar):
             k.renk = RENKLER[i % len(RENKLER)]
         self.hepsini_ciz()
         dur = self.dur
         threading.Thread(target=self._arka_plan, args=(list(self.kaynaklar), dur),
                          daemon=True).start()
-
-    def _tumu_sec(self):
-        """TUMU isaretlenince 0'dan son taramaya kadar cakismayan taramalarin hepsi secilir;
-        isaret kaldirilinca secim bosaltilir."""
-        acik = self.tumu.get()
-        for kimlik, v in self.secim.items():
-            v.set(acik and kimlik in self.tumu_kimlikler)
-        self.hepsini_ciz()
 
     def _arka_plan(self, kaynaklar, dur):
         for k in kaynaklar:
@@ -452,10 +475,78 @@ class Uygulama:
         self.kok.destroy()
 
     # ------------------------------------------------------------ cizimler
+    @staticmethod
+    def _t_yaz(x):
+        return kv.trilyon(x)[:-1]
+
+    @staticmethod
+    def _t_oku(metin):
+        """'12,5' / '12.5' / '1000' trilyon -> 1 milyarin kati tam sayi (None: gecersiz/bos)."""
+        try:
+            t = float(metin.strip().replace(",", "."))
+        except ValueError:
+            return None
+        return int(round(t * 1000)) * 10 ** 9 if t >= 0 else None
+
+    def _gen(self):
+        g = self.a_gen.get().strip().lower()
+        return None if g in ("", "bolme", "0") else self._t_oku(g)
+
+    def aralik_modu(self):
+        return self.a_acik.get() and bool(self.tum)
+
+    def araliklar(self):
+        """Tum aralik modunda [bas, bit) araliginin gen'lik dilimleri (sanal kaynaklar) ve tek
+        parca butun aralik. Gecersiz girdide ([], None) doner, hata a_bilgi'ye yazilir."""
+        bas, bit = self._t_oku(self.a_bas.get()), self._t_oku(self.a_bit.get())
+        g = self.a_gen.get().strip().lower()
+        gen = self._gen()
+        hata = None
+        if bas is None or bit is None:
+            hata = "baslangic/bitis sayi olmali (trilyon)"
+        elif g not in ("", "bolme", "0") and not gen:
+            hata = "aralik genisligi trilyon cinsinden sayi olmali, en az 0,001T (1 milyar)"
+        else:
+            bit = min(bit, self.son)
+            if bit <= bas:
+                hata = f"bitis baslangictan buyuk olmali (en son taranan {kv.trilyon(self.son)})"
+            elif gen and (bit - bas) // gen > 2000:
+                hata = "en fazla 2000 aralik: genisligi buyutun"
+        if hata:
+            self.a_bilgi.config(text="⚠ " + hata, foreground="#b00")
+            return [], None
+        anahtar = (bas, bit, gen, tuple((k.kimlik, k.yuklendi) for k in self.tum))
+        if self._aralik_onbellek[0] != anahtar:
+            parcalar = kv.aralik_kaynaklari(self.tum, bas, bit, gen)
+            butun = kv.aralik_kaynaklari(self.tum, bas, bit)
+            n = len(parcalar)
+            for i, a in enumerate(parcalar):
+                a.renk = sira_rengi(i / max(1, n - 1)) if n > 1 else "#2a6fdb"
+            for a in butun:
+                a.renk = "#222"
+            self._aralik_onbellek = (anahtar, parcalar, butun[0] if butun else None)
+        _, parcalar, butun = self._aralik_onbellek
+        self.a_bilgi.config(
+            foreground="#555",
+            text=f"{len(parcalar)} aralik · {kv.trilyon(bas)} – {kv.trilyon(bit)}"
+                 + (f" · {kv.trilyon(gen)}'lik" if gen else " · bolunmeden")
+                 + "  (bu modda tek tek tarama secimi kullanilmaz)")
+        return parcalar, butun
+
     def secili(self):
+        if self.aralik_modu():
+            return self.araliklar()[0]
         return [k for k in self.kaynaklar if self.secim[k.kimlik].get()]
 
     def birlesik(self):
+        if self.aralik_modu():
+            # analizler ve yogunluk icin gercek taramalar (araliga dokunanlar)
+            parcalar, _ = self.araliklar()
+            self.uyari.config(text="")
+            if not parcalar:
+                return []
+            bas, bit = parcalar[0].bas, parcalar[-1].bit
+            return [k for k in self.tum if k.bas < bit and bas < k.sinir]
         alinan, atilan = kv.birlesik_kaynaklar(self.secili())
         if atilan:
             self.uyari.config(text="Cakisan aralik birlesikte kullanilmadi: " +
@@ -465,8 +556,11 @@ class Uygulama:
         return alinan
 
     def hepsini_ciz(self):
-        self.tumu.set(bool(self.secim) and {k for k, v in self.secim.items() if v.get()}
-                      == set(self.tumu_kimlikler))
+        acik = self.aralik_modu()
+        for d in self.secim_dugmeleri:
+            d.state(["disabled"] if acik else ["!disabled"])
+        if not acik:
+            self.a_bilgi.config(text="")
         self.birlesik()
         self.ciz_uzunluk()
         self.ciz_yogunluk()
@@ -482,8 +576,29 @@ class Uygulama:
                     m = max(m, i + 1)
         return min(m + 1, 21)
 
+    @staticmethod
+    def _ilk(kaynaklar):
+        """P1-P5 bilinmeyen (bolunmus aralik) kaynak varsa kategoriler P6'dan baslar."""
+        return 5 if any(k.sayac["P1"] is None for k in kaynaklar) else 0
+
+    @staticmethod
+    def _gosterge_kisalt(seriler, en_cok=12):
+        """Cok seride gostergede yalniz ilk, son ve 'Birlesik' kalir (digerleri '_' ile gizlenir)."""
+        if len(seriler) <= en_cok:
+            return seriler
+        son = len([s for s in seriler if not s[0].startswith("Birlesik")]) - 1
+        return [s if i in (0, son) or s[0].startswith("Birlesik") else ("_" + s[0],) + tuple(s[1:])
+                for i, s in enumerate(seriler)]
+
+    @staticmethod
+    def _kaynak_adi(k):
+        if k.program == "Aralik":
+            return f"{kv.trilyon(k.bas)}–{kv.trilyon(k.bit)}"
+        return f"{k.program} {kv.trilyon(k.bas)}–{kv.trilyon(k.sinir)}"
+
     def _birlesik_sayac(self, kaynaklar):
-        say = {a: sum(k.sayac[a] for k in kaynaklar) for a in kv.SAYAC_ANAHTARLARI}
+        say = {a: (None if any(k.sayac[a] is None for k in kaynaklar)
+                   else sum(k.sayac[a] for k in kaynaklar)) for a in kv.SAYAC_ANAHTARLARI}
         return say, sum(k.asal for k in kaynaklar)
 
     def _aralik_adi(self, kaynaklar):
@@ -493,20 +608,28 @@ class Uygulama:
                f"{kv.trilyon(max(k.sinir for k in kaynaklar))}"
 
     def ciz_uzunluk(self):
-        sec = self.birlesik() if self.u_gorunum.get() == "birlesik" else self.secili()
+        aralik = self.aralik_modu()
+        if self.u_gorunum.get() == "birlesik":
+            sec = [b for b in [self.araliklar()[1]] if b] if aralik else self.birlesik()
+        else:
+            sec = self.secili()
         m = self._en_uzun(sec)
-        kat = kv.SAYAC_ANAHTARLARI[:m]
+        kat = kv.SAYAC_ANAHTARLARI[self._ilk(sec):m]
+        hazir = all(k.yuklendi for k in sec)
 
         def cizici(g):
             if not sec:
-                return g.bos("Ustten en az bir tarama secin")
+                return g.bos("Ustten en az bir tarama secin" if not aralik else
+                             "Aralik girdisi gecersiz (ust satirdaki uyariya bakin)")
+            if not hazir:
+                return g.bos("Bolum dosyalari okunuyor... (aralik adetleri dosyalardan toplanir)")
             if self.u_gorunum.get() == "birlesik":
                 say, _ = self._birlesik_sayac(sec)
                 seriler = [(f"Birlesik {self._aralik_adi(sec)}", "#2a6fdb",
                             [say[a] for a in kat])]
             else:
-                seriler = [(f"{k.program} {kv.trilyon(k.bas)}–{kv.trilyon(k.sinir)}", k.renk,
-                            [k.sayac[a] for a in kat]) for k in sec]
+                seriler = self._gosterge_kisalt(
+                    [(self._kaynak_adi(k), k.renk, [k.sayac[a] for a in kat]) for k in sec])
             g.cubuklar("Uzunluga gore zincir sayisi (tam uzunluk Pk)", kat, seriler,
                        ylog=self.u_log.get(), ybaslik="zincir sayisi")
         self.g_uzunluk.ayarla(cizici)
@@ -514,6 +637,12 @@ class Uygulama:
     def ciz_yogunluk(self):
         sec = self.birlesik()
         gen = int(self.y_dilim.get().split()[0]) * 10 ** 12
+        alt = ust = None
+        if self.aralik_modu() and sec:
+            parcalar, _ = self.araliklar()
+            alt, ust = parcalar[0].bas, parcalar[-1].bit
+            gen = self._gen() or gen
+        dilim_adi = kv.trilyon(gen)
         uzunluklar = [uz for uz, v in self.y_uz.items() if v.get()]
         olcek = self.y_olcek.get()
         hazir = all(k.yuklendi for k in sec)
@@ -524,7 +653,7 @@ class Uygulama:
             if not hazir:
                 return g.bos("Bolum dosyalari okunuyor...\n(ilerleme alt satirda; ilk okuma "
                              "P6/P7 icin birkac dakika surebilir)")
-            dilimler, adet, kapsam, asal = kv.dilim_yogunlugu(sec, gen, uzunluklar)
+            dilimler, adet, kapsam, asal = kv.dilim_yogunlugu(sec, gen, uzunluklar, alt, ust)
             seriler = []
             for uz in uzunluklar:
                 xs, ys, ip = [], [], []
@@ -552,15 +681,22 @@ class Uygulama:
             if self.y_isaret.get():
                 for k in sec:
                     for bas, uz in k.konum:
+                        if alt is not None and not alt <= bas < ust:
+                            continue
                         isaretler.append((bas / 1e12, UZUN_RENK.get(uz, "#000"),
                                           f"P{uz} baslangic: {kv.nokta(bas)}"))
             yb = {"adet": "dilimdeki zincir sayisi",
                   "asal": "milyon asal basina zincir",
                   "goreli": "dilim orani / genel oran"}[olcek]
-            xa = min(k.bas for k in sec) / 1e12
-            xb = max(k.sinir for k in sec) / 1e12
+            if alt is None:
+                xa, xb = min(k.bas for k in sec), max(k.sinir for k in sec)
+                aralik_adi = self._aralik_adi(sec)
+            else:
+                xa, xb = alt, min(ust, max(k.sinir for k in sec))
+                aralik_adi = f"{kv.trilyon(xa)} – {kv.trilyon(xb)}"
+            xa, xb = xa / 1e12, xb / 1e12
             g.cizgiler(f"P6+ zincirlerin sayi dogrusundaki yogunlugu – "
-                       f"{self.y_dilim.get()}lik dilimler ({self._aralik_adi(sec)})",
+                       f"{dilim_adi}'lik dilimler ({aralik_adi})",
                        seriler, ylog=self.y_log.get(), ybaslik=yb,
                        xbaslik="baslangic asali (trilyon)  ·  ▲ = P10+ zincir baslangici",
                        xmin=xa, xmax=xb, xetiket=lambda v: sayi_yaz(v) + "T",
@@ -570,37 +706,46 @@ class Uygulama:
     def ciz_oran(self):
         sec = self.secili()
         tur = self.o_tur.get()
-        bir = self.birlesik()
+        aralik = self.aralik_modu()
+        bir = [b for b in [self.araliklar()[1]] if b] if aralik else self.birlesik()
+        hazir = all(k.yuklendi for k in sec)
 
         def cizici(g):
             if not sec:
-                return g.bos("Ustten en az bir tarama secin")
-            m = self._en_uzun(sec)
-            kat = kv.SAYAC_ANAHTARLARI[:m]
-            liste = [(f"{k.program} {kv.trilyon(k.bas)}–{kv.trilyon(k.sinir)}", k.renk,
-                      [k.sayac[a] for a in kv.SAYAC_ANAHTARLARI], k.asal) for k in sec]
-            if len(bir) > 1:
+                return g.bos("Ustten en az bir tarama secin" if not aralik else
+                             "Aralik girdisi gecersiz (ust satirdaki uyariya bakin)")
+            if not hazir:
+                return g.bos("Bolum dosyalari okunuyor... (aralik adetleri dosyalardan toplanir)")
+            ilk = self._ilk(sec)
+            m = self._en_uzun(sec) - ilk
+            kat = kv.SAYAC_ANAHTARLARI[ilk:ilk + m]
+            liste = [(self._kaynak_adi(k), k.renk,
+                      [k.sayac[a] for a in kv.SAYAC_ANAHTARLARI][ilk:], k.asal) for k in sec]
+            if len(sec) > 1 and (aralik or len(bir) > 1):
                 say, asal = self._birlesik_sayac(bir)
                 liste.append((f"Birlesik {self._aralik_adi(bir)}", "#222",
-                              [say[a] for a in kv.SAYAC_ANAHTARLARI], asal))
+                              [say[a] for a in kv.SAYAC_ANAHTARLARI][ilk:], asal))
             seriler = []
             for ad, renk, ds, asal in liste:
+                if not asal:
+                    continue
                 if tur == "asal":
                     ys = [d / asal * 1e6 for d in ds[:m]]
                     x = list(range(m))
-                    ip = [f"{ad}\n{kat[i]}: {kv.nokta(ds[i])} / {kv.nokta(asal)} asal\n"
+                    ip = [f"{ad}\n{kat[i]}: {kv.nokta(ds[i])} / {kv.nokta(round(asal))} asal\n"
                           f"= milyon asal basina {sayi_yaz(ys[i])}" for i in x]
                 elif tur == "kumulatif":
                     ys = [sum(ds[i:]) / asal for i in range(m)]
                     x = list(range(m))
-                    ip = [f"{ad}\n≥{kat[i]}: {kv.nokta(sum(ds[i:]))} / {kv.nokta(asal)}\n"
-                          f"= {sayi_yaz(ys[i])}" for i in x]
+                    ip = [f"{ad}\n≥{kat[i]}: {kv.nokta(sum(ds[i:]))} / {kv.nokta(round(asal))}"
+                          f"\n= {sayi_yaz(ys[i])}" for i in x]
                 else:
                     x = list(range(1, m))
                     ys = [ds[i] / ds[i - 1] if ds[i - 1] else None for i in x]
                     ip = [f"{ad}\n{kat[i]} / {kat[i - 1]} = {kv.nokta(ds[i])} / "
                           f"{kv.nokta(ds[i - 1])}\n= {sayi_yaz(ys[i - 1] or 0)}" for i in x]
                 seriler.append((ad, renk, x, ys, ip))
+            seriler = self._gosterge_kisalt(seriler)
             baslik, yb = {
                 "asal": ("Asal basina zincir orani (taramalar arasi karsilastirma)",
                          "milyon asal basina Pk"),
@@ -612,8 +757,55 @@ class Uygulama:
                        xmin=-0.3, xmax=m - 0.7, kategorik=kat)
         self.g_oran.ayarla(cizici)
 
+    def _not_yaz(self, metin):
+        self.not_metni.config(state="normal")
+        self.not_metni.delete("1.0", "end")
+        self.not_metni.insert("1.0", metin)
+        self.not_metni.config(state="disabled")
+
+    def _tablo_aralik(self, sec):
+        """Tum aralik modu: her satir bir aralik; P6+ adetleri, asal sayisi, oranlar."""
+        t = self.tablo
+        t.delete(*t.get_children())
+        m = self._en_uzun(sec) if sec else 6
+        uz = list(range(6, m + 1))
+        kolonlar = ["ar", "asal"] + [f"P{u}" for u in uz] + ["p6m", "p76"]
+        t["columns"] = kolonlar
+        basliklar = {"ar": "Aralik", "asal": "Asal sayisi",
+                     "p6m": "≥P6 / milyon asal", "p76": "P7/P6"}
+        for c in kolonlar:
+            t.heading(c, text=basliklar.get(c, kv.SAYAC_ANAHTARLARI[int(c[1:]) - 1]
+                                            if c.startswith("P") else c))
+            t.column(c, width={"ar": 150, "asal": 150}.get(c, 90),
+                     anchor="w" if c == "ar" else "e")
+        if not sec or not all(k.yuklendi for k in sec):
+            self._not_yaz("Bolum dosyalari okunuyor..." if sec else
+                          "Aralik girdisi gecersiz (ust satirdaki uyariya bakin).")
+            return
+        _, butun = self.araliklar()
+        for k in sec + ([butun] if butun and len(sec) > 1 else []):
+            ds = [k.sayac[kv.SAYAC_ANAHTARLARI[u - 1]] for u in uz]
+            ad = ("TOPLAM " if k is butun else "") + self._kaynak_adi(k)
+            if k.kapsam < k.bit - k.bas:
+                ad += f" (kapsanan {kv.trilyon(k.kapsam)})"
+            t.insert("", "end", values=[
+                ad, kv.nokta(round(k.asal)) + ("" if k.kesin else " ~"),
+                *[kv.nokta(d) for d in ds],
+                sayi_yaz(sum(ds) / k.asal * 1e6) if k.asal else "-",
+                sayi_yaz(ds[1] / ds[0]) if len(ds) > 1 and ds[0] else "-"])
+        self._not_yaz(
+            "Tum aralik modu: araliklar, 0'dan en son taranan sayiya kadar cakismayan taramalardan "
+            "kesilir (" + ", ".join(k.etiket() for k in self.tum) + ").\n"
+            "P6+ adetleri 1 milyarlik bolum dosyalarindan toplanir. P1–P5 yalniz aralik taramalarin "
+            "tam sinirlarina denk geldiginde bilinir; bolunmus araliklarda grafikler P6'dan baslar.\n"
+            "'~' isaretli asal sayilari li(b) − li(a) tahminidir (10^13 olceginde sapma milyonda "
+            "birin altinda); isaretsizler taramanin saydigi kesin degerdir.\n"
+            "Analizler sekmesi, araliga dokunan taramalarin tamamini kullanir.")
+
     def tablo_doldur(self):
         sec = self.secili()
+        if self.aralik_modu():
+            return self._tablo_aralik(sec)
         t = self.tablo
         t.delete(*t.get_children())
         kolonlar = ["uz"]

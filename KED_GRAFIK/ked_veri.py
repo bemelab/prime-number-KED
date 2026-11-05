@@ -160,6 +160,88 @@ def varsayilan_secim(kaynaklar):
     return {k.kimlik for k in secili}
 
 
+def tum_kapsam(kaynaklar):
+    """0'dan en son taranan sayiya kadar kullanilacak taramalar: tamamlanmis ve cakismayanlar,
+    ustune bunlarla cakismayan yarim taramalar (tamamlanan_sinir'e kadar)."""
+    varsayilan = varsayilan_secim(kaynaklar)
+    secili = [k for k in kaynaklar if k.kimlik in varsayilan]
+    for k in sorted(kaynaklar, key=lambda k: -(k.sinir - k.bas)):
+        if k not in secili and not any(k.bas < s.sinir and s.bas < k.sinir for s in secili):
+            secili.append(k)
+    secili.sort(key=lambda k: k.bas)
+    return secili
+
+
+class Aralik:
+    """Taramalardan kesilmis sanal aralik [bas, bit).
+    P6+ adetleri 1 milyarlik bolum dosyalarindan toplanir. P1-P5 yalniz aralik taramalarin
+    tamamindan olusuyorsa bilinir (yoksa None); asal sayisi o durumda kesin, degilse
+    li(b) - li(a) tahminidir."""
+    program = "Aralik"
+    tamam = True
+    oran = 1.0
+
+    def __init__(self, bas, bit):
+        self.bas, self.bit = bas, bit
+        self.sinir = bas
+        self.parcalar = []      # (kaynak, a, b)
+        self.adet = {}          # uzunluk -> zincir sayisi (bolum dosyalarindan)
+        self.konum = []
+        self.ozet = {}
+        self.sayac = {}
+        self.asal = 0
+        self.kapsam = 0
+        self.kesin = False
+        self.yuklendi = True
+
+    @property
+    def kimlik(self):
+        return f"Aralik/{self.bas}-{self.bit}"
+
+    def etiket(self):
+        return f"{trilyon(self.bas)} – {trilyon(self.bit)}"
+
+    def dosya_toplami(self, uz):
+        return self.adet.get(uz, 0)
+
+    def _tamamla(self):
+        p = self.parcalar
+        self.kapsam = sum(b - a for _, a, b in p)
+        self.sinir = max((b for _, _, b in p), default=self.bas)
+        self.yuklendi = all(k.yuklendi for k, _, _ in p)
+        self.kesin = bool(p) and all(a == k.bas and b == k.sinir for k, a, b in p)
+        for i, s in enumerate(SAYAC_ANAHTARLARI):
+            if self.kesin:
+                self.sayac[s] = sum(k.sayac[s] for k, _, _ in p)
+            else:
+                self.sayac[s] = self.adet.get(i + 1, 0) if i >= 5 else None
+        self.asal = (sum(k.asal for k, _, _ in p) if self.kesin
+                     else sum(asal_tahmini(a, b) for _, a, b in p))
+
+
+def aralik_kaynaklari(kaynaklar, bas, bit, genislik=None):
+    """[bas, bit) araligini `genislik` boyunda (None: tek parca) sanal Aralik'lara boler.
+    Sinirlar 1 milyarin kati olmalidir (bolum dosyalari 1 milyarliktir)."""
+    genislik = genislik or (bit - bas)
+    araliklar = [Aralik(a, min(a + genislik, bit)) for a in range(bas, bit, genislik)]
+    for k in kaynaklar:
+        for ar in araliklar:
+            a, b = max(ar.bas, k.bas), min(ar.bit, k.sinir)
+            if b > a:
+                ar.parcalar.append((k, a, b))
+        for uz, d in k.bolum.items():
+            for alt, c in d.items():
+                if bas <= alt < bit:
+                    ad = araliklar[(alt - bas) // genislik].adet
+                    ad[uz] = ad.get(uz, 0) + c
+        for p, uz in k.konum:
+            if bas <= p < bit:
+                araliklar[(p - bas) // genislik].konum.append((p, uz))
+    for ar in araliklar:
+        ar._tamamla()
+    return [ar for ar in araliklar if ar.kapsam]
+
+
 def birlesik_kaynaklar(secili):
     """Secili kaynaklardan kapsami cakismayanlar; cakisanlar ayrica dondurulur."""
     alinan, atilan = [], []
@@ -279,13 +361,15 @@ def kaynak_yukle(kaynak, ilerleme=None, dur=None, isci=16):
 
 # ---------------------------------------------------------------- hesaplar
 
-def dilim_yogunlugu(kaynaklar, genislik, uzunluklar):
-    """Sayi dogrusunu `genislik` boyunda dilimlere boler.
+def dilim_yogunlugu(kaynaklar, genislik, uzunluklar, alt=None, ust=None):
+    """Sayi dogrusunu `genislik` boyunda dilimlere boler (alt/ust verilmezse taramalarin kapsami).
     Donus: dilim_alt listesi, {uz: [adet]}, [kapsanan uzunluk], [tahmini asal]"""
     if not kaynaklar:
         return [], {}, [], []
-    alt = min(k.bas for k in kaynaklar) // genislik * genislik
-    ust = max(k.sinir for k in kaynaklar)
+    if alt is None:
+        alt = min(k.bas for k in kaynaklar) // genislik * genislik
+    if ust is None:
+        ust = max(k.sinir for k in kaynaklar)
     n = max(1, -(-(ust - alt) // genislik))
     dilimler = [alt + i * genislik for i in range(n)]
     adet = {uz: [0] * n for uz in uzunluklar}
@@ -293,12 +377,13 @@ def dilim_yogunlugu(kaynaklar, genislik, uzunluklar):
     asal = [0.0] * n
     for k in kaynaklar:
         for i, d in enumerate(dilimler):
-            a, b = max(d, k.bas), min(d + genislik, k.sinir)
+            a, b = max(d, k.bas), min(d + genislik, k.sinir, ust)
             if b > a:
                 kapsam[i] += b - a
                 asal[i] += asal_tahmini(a, b)
         for uz in uzunluklar:
             dizi = adet[uz]
             for bolum_alt, c in k.bolum.get(uz, {}).items():
-                dizi[(bolum_alt - alt) // genislik] += c
+                if alt <= bolum_alt < ust:
+                    dizi[(bolum_alt - alt) // genislik] += c
     return dilimler, adet, kapsam, asal
