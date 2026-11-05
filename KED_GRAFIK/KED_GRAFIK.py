@@ -8,9 +8,10 @@ Grafikler saf tkinter Canvas ile cizilir (ek kutuphane gerekmez).
 import math
 import queue
 import threading
+import os
 import tkinter as tk
 import traceback
-from tkinter import ttk
+from tkinter import filedialog, ttk
 
 import ked_analiz as ka
 import ked_veri as kv
@@ -246,6 +247,9 @@ class Uygulama:
         self.tum = []                   # 0'dan en son taranan sayiya kadar kullanilan taramalar
         self.son = 0                    # en son taranan sayi
         self._aralik_onbellek = (None, [], None)
+        self.klasor = kv.ayar_oku().get("tarama_klasoru") or None   # None: depodaki taramalar
+        if self.klasor and not os.path.isdir(self.klasor):
+            self.klasor = None
         self.R = None                   # analiz sonuclari (ked_analiz.analiz_et)
         self.analiz_anahtar = None      # R'nin hesaplandigi kaynak secimi
         self.analiz_calisan = None
@@ -284,6 +288,11 @@ class Uygulama:
         satir = ttk.Frame(ust)
         satir.pack(fill="x", pady=(4, 0))
         ttk.Button(satir, text="Yeniden tara (diskten oku)", command=self.yukle).pack(side="left")
+        ttk.Button(satir, text="Klasor sec...", command=self.klasor_sec).pack(side="left", padx=(8, 0))
+        ttk.Button(satir, text="Varsayilan klasor", command=lambda: self.klasor_ayarla(None)
+                   ).pack(side="left", padx=(4, 0))
+        self.klasor_etiket = ttk.Label(satir, text="", foreground="#555")
+        self.klasor_etiket.pack(side="left", padx=8)
         self.uyari = ttk.Label(satir, text="", foreground="#b00")
         self.uyari.pack(side="left", padx=10)
 
@@ -391,7 +400,11 @@ class Uygulama:
         self.dur = threading.Event()
         self.yukleme_bitti = False
         self.analiz_anahtar = self.analiz_calisan = None
-        self.kaynaklar = kv.kaynaklari_bul()
+        self.kaynaklar = kv.kaynaklari_bul(self.klasor)
+        self.klasor_etiket.config(
+            text="Klasor: " + (self.klasor or f"{kv.DEPO} (KED, KED_GPU, KED_CLANG)")
+                 + f"  ·  {len(self.kaynaklar)} tarama")
+        self._uyari_temizle()
         varsayilan = kv.varsayilan_secim(self.kaynaklar)
         for w in self.secim_cerceve.winfo_children():
             w.destroy()
@@ -419,6 +432,26 @@ class Uygulama:
         dur = self.dur
         threading.Thread(target=self._arka_plan, args=(list(self.kaynaklar), dur),
                          daemon=True).start()
+
+    def klasor_sec(self):
+        yol = filedialog.askdirectory(
+            parent=self.kok, mustexist=True, initialdir=self.klasor or kv.DEPO,
+            title="Tarama klasoru: depo koku, PATI_TARAMALAR ya da tek bir ARALIK_* klasoru")
+        if yol:
+            self.klasor_ayarla(os.path.normpath(yol))
+
+    def klasor_ayarla(self, yol):
+        """Taramalarin okunacagi klasoru degistirir (None: depodaki varsayilan yerler) ve
+        secimi AYARLAR.txt'ye yazar."""
+        if yol == self.klasor:
+            return
+        self.klasor = yol
+        kv.ayar_yaz(tarama_klasoru=yol)
+        self.secim = {}
+        self.son = 0
+        self.a_bit.set("")
+        self.R = None
+        self.yukle()
 
     def _arka_plan(self, kaynaklar, dur):
         for k in kaynaklar:
@@ -533,6 +566,11 @@ class Uygulama:
                  + "  (bu modda tek tek tarama secimi kullanilmaz)")
         return parcalar, butun
 
+    def _uyari_temizle(self):
+        self.uyari.config(text="" if self.kaynaklar else
+                          "Bu klasorde PATI_CHECKPOINT.txt iceren tarama bulunamadi "
+                          "(ARALIK_* klasorlerini, PATI_TARAMALAR'i ya da depo kokunu secin).")
+
     def secili(self):
         if self.aralik_modu():
             return self.araliklar()[0]
@@ -542,7 +580,7 @@ class Uygulama:
         if self.aralik_modu():
             # analizler ve yogunluk icin gercek taramalar (araliga dokunanlar)
             parcalar, _ = self.araliklar()
-            self.uyari.config(text="")
+            self._uyari_temizle()
             if not parcalar:
                 return []
             bas, bit = parcalar[0].bas, parcalar[-1].bit
@@ -552,7 +590,7 @@ class Uygulama:
             self.uyari.config(text="Cakisan aralik birlesikte kullanilmadi: " +
                                    ", ".join(k.etiket() for k in atilan))
         else:
-            self.uyari.config(text="")
+            self._uyari_temizle()
         return alinan
 
     def hepsini_ciz(self):

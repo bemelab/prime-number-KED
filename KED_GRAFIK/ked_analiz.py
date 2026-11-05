@@ -192,7 +192,7 @@ def ki_kare_p(x, sd):
 # ---------------------------------------------------------------- onbellek
 
 def _ob_yolu(on, kaynak):
-    return os.path.join(kv.ONBELLEK, f"{on}__{kaynak.program}__{kaynak.ad}.txt")
+    return os.path.join(kv.ONBELLEK, f"{on}__{kaynak.onbellek_adi}.txt")
 
 
 def _json_oku(yol, anahtar):

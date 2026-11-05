@@ -10,6 +10,7 @@ Kaynaklar: <depo>/{KED,KED_GPU,KED_CLANG}/PATI_TARAMALAR/ARALIK_*/
 P6/P7 klasorlerinde yuz binlerce dosya olabildiginden bolum basina zincir adetleri
 KED_GRAFIK/ONBELLEK altinda TXT olarak saklanir; dosya boyutu degismediyse yeniden okunmaz.
 """
+import hashlib
 import math
 import os
 import re
@@ -25,6 +26,8 @@ DOSYA_RE = re.compile(r"_(\d+)_(\d+)\.txt$")
 BU_KLASOR = os.path.dirname(os.path.abspath(__file__))
 DEPO = os.path.dirname(BU_KLASOR)
 ONBELLEK = os.path.join(BU_KLASOR, "ONBELLEK")
+AYAR_DOSYASI = os.path.join(ONBELLEK, "AYARLAR.txt")
+ATLANAN_KLASOR_RE = re.compile(r"^(P\d+|P21_PLUS|\..*|ONBELLEK|__pycache__)$", re.I)
 
 
 def nokta(n):
@@ -126,6 +129,17 @@ class Kaynak:
     def kimlik(self):
         return f"{self.program}/{self.ad}"
 
+    @property
+    def onbellek_adi(self):
+        """Depodaki olagan yerde '<program>__<ARALIK>'; baska bir klasordeyse ayni adli
+        taramalar karismasin diye klasor yolunun kisa ozeti eklenir."""
+        ad = f"{self.program}__{self.ad}"
+        olagan = os.path.join(DEPO, self.program, "PATI_TARAMALAR", self.ad)
+        if os.path.normcase(os.path.abspath(self.klasor)) != os.path.normcase(olagan):
+            ad += "__" + hashlib.md5(os.path.normcase(os.path.abspath(self.klasor))
+                                     .encode("utf-8")).hexdigest()[:8]
+        return ad
+
     def etiket(self):
         durum = "tamam" if self.tamam else f"%{self.oran * 100:.2f} (sinir {trilyon(self.sinir)})"
         return f"{self.program}  {trilyon(self.bas)} – {trilyon(self.bit)}  [{durum}]"
@@ -134,7 +148,67 @@ class Kaynak:
         return sum(self.bolum.get(uz, {}).values())
 
 
-def kaynaklari_bul():
+def ayar_oku():
+    return anahtar_degerleri(AYAR_DOSYASI) if os.path.exists(AYAR_DOSYASI) else {}
+
+
+def ayar_yaz(**degerler):
+    d = ayar_oku()
+    d.update({k: v for k, v in degerler.items() if v is not None})
+    for k in [k for k, v in degerler.items() if v is None]:
+        d.pop(k, None)
+    os.makedirs(ONBELLEK, exist_ok=True)
+    with open(AYAR_DOSYASI, "w", encoding="utf-8") as f:
+        f.write("# KED_GRAFIK ayarlari (silinebilir)\n")
+        for k in sorted(d):
+            f.write(f"{k} = {d[k]}\n")
+
+
+def _program_adi(klasor):
+    """ARALIK klasorunun yolundan program adi: KED / KED_GPU / KED_CLANG ya da
+    PATI_TARAMALAR'in bir ustundeki klasorun adi."""
+    parcalar = os.path.normpath(os.path.abspath(klasor)).split(os.sep)
+    for p in reversed(parcalar[:-1]):
+        if p.upper() in PROGRAMLAR:
+            return p.upper()
+    for i in range(len(parcalar) - 2, 0, -1):
+        if parcalar[i].upper() == "PATI_TARAMALAR":
+            return parcalar[i - 1]
+    return parcalar[-2] if len(parcalar) > 1 else "?"
+
+
+def klasorden_bul(kok, derinlik=4):
+    """Secilen klasorde (kendisi, PATI_TARAMALAR ya da depo koku olabilir) PATI_CHECKPOINT.txt
+    iceren tarama klasorlerini en fazla `derinlik` seviye asagiya kadar arar. Zincir dosyasi
+    klasorleri (P6, P7, ...) taranmaz."""
+    bulunan = []
+
+    def gez(yol, d):
+        if os.path.exists(os.path.join(yol, "PATI_CHECKPOINT.txt")):
+            try:
+                bulunan.append(Kaynak(_program_adi(yol), yol))
+            except (KeyError, ValueError, OSError):
+                pass
+            return
+        if d == 0:
+            return
+        try:
+            alt = sorted((e for e in os.scandir(yol) if e.is_dir()), key=lambda e: e.name)
+        except OSError:
+            return
+        for e in alt:
+            if not ATLANAN_KLASOR_RE.match(e.name):
+                gez(e.path, d - 1)
+
+    gez(kok, derinlik)
+    bulunan.sort(key=lambda k: (k.bas, k.bit, k.program))
+    return bulunan
+
+
+def kaynaklari_bul(kok=None):
+    """kok None: depodaki KED, KED_GPU, KED_CLANG/PATI_TARAMALAR; verilirse o klasorde arar."""
+    if kok:
+        return klasorden_bul(kok)
     bulunan = []
     for prog in PROGRAMLAR:
         kok = os.path.join(DEPO, prog, "PATI_TARAMALAR")
@@ -274,7 +348,7 @@ def _konum_oku(yol):
 
 
 def _onbellek_yolu(kaynak, uzk):
-    return os.path.join(ONBELLEK, f"{kaynak.program}__{kaynak.ad}__{uzk}.txt")
+    return os.path.join(ONBELLEK, f"{kaynak.onbellek_adi}__{uzk}.txt")
 
 
 def _onbellek_oku(yol):
