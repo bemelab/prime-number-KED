@@ -1,0 +1,134 @@
+PATI KED - ANALIZLER (KED_GRAFIK > "Analizler" sekmesi)
+========================================================
+Tarih: 05.11.2026. Veri: KED_GPU taramalari 1 – 999.953T (700–1000T taramasi %99,98'de),
+29.844.570.422.669 asal, 139.264 P8+ zincir. Bu dosyadaki sayilar bu veriyle hesaplandi;
+program her acilista guncel taramalardan yeniden hesaplar.
+
+KED(n) = Σ rakam² · 10^konum. Zincir asal p'den baslar, KED degerleri asal kaldikca uzar;
+Pk = tam k uzunlukta zincir sayisi. q(k) = N(≥k+1)/N(≥k) = k. terimden k+1. terime uzama olasiligi.
+
+DOSYALAR
+  KED_GRAFIK.py   arayuz; "Analizler" sekmesinde 10 analiz + Kaynakca alt sekmesi
+  ked_analiz.py   butun hesaplar (yalniz okur)
+  ked_aciklama.py her alt sekmenin altinda gorunen yontem/kaynak notlari
+  ONBELLEK/       ANALIZ_ZINCIR__*.txt (P8+ zincir listesi), ANALIZ_BLOK__*.txt (P6/P7 blok
+                  orneklemi), ANALIZ_ORNEK__*.txt (rastgele pencere orneklemi). Silinebilir;
+                  ilk hesap ~2 dakika, sonra ~15 saniye.
+
+VERI KAYNAKLARI VE ORNEKLEMLER
+  - Pk sayaclari: PATI_CHECKPOINT.txt (tam).
+  - P8+ zincirleri: bolum dosyalarinin tamami. Her satirdaki terimler KED yinelemesiyle yeniden
+    hesaplandi: 139.264 zincirin hepsi birebir dogru.
+  - P6/P7: her 97. milyarlik blogun dosyalari (k = 6, 7 adimlarinin model ortalamasi icin).
+  - Rastgele pencere orneklemi: araliklara orantili 52 pencere × 4 milyon sayi, pencerelerdeki
+    6.260.473 asalin tamami zincirlenir. Kaynak agirligi = taramadaki asal sayisi / ornek sayisi.
+    Pencere basina ayrica 4.000 duzgun dagilimli asal (rakam analizleri) ve 15.000'er kontrol
+    ornegi alinir.
+
+-------------------------------------------------------------------------------------------
+1) BEKLENTI MODELI
+  Yontem: x = KED(t) icin P(x asal) = C(x)/ln x (Cramer). Varyantlar:
+    V0 1/ln x · V1 ×2,5 (son rakam 1/9 → 2 ve 5'e bolunmez) · V2 + mod 3 (KED ≡ 3'e bolunmeyen
+    rakam sayisi, mod 3; bolunurse 0, degilse ×3/2) · V3 + mod 11 (10 ≡ −1) · V4 1000'e kadar elek
+    (Granville). Model q(k), k. terimlerin gercek dagilimi uzerinden ortalanir; beklenen
+    P(k+1)/Pk = q(k)(1−q(k+1))/(1−q(k)).
+  Kaynak: Cramer (1936); Granville (1995); Bateman–Horn (1962) yerel carpanlar.
+  Bulgu: V1–V4 gozlenen P(k+1)/Pk'yi binde birkac hata ile verir (P2/P1: gozlenen 0,0717,
+    model 0,0715; P9/P8: 0,0568 / 0,0575). V0 (duzeltmesiz 1/ln x) 2,5 kat dusuk kalir. Oranin
+    k ile azalmasi (0,072 → 0,057) tamamen terimlerin buyumesinden gelir (ort. ln x 35 → 44).
+
+2) HAFIZA TESTI
+  Yontem: r(k) = gozlenen q(k)/model q(k); ters varyans agirlikli ki-kare homojenlik testi
+    (k = 1..10; daha az ornekli adimlar disarida).
+  Kaynak: hafizasizlik (Markov) testi; Wilson guven araligi; Pearson ki-kare.
+  Bulgu: mod 3 duzeltmeli modelde r(k) ≈ 1,002 sabit; ki-kare 5,3 (sd 9), p = 0,81. Mod 11 ile
+    p = 0,52, elek ≤1000 ile p = 0,11. Yalniz 2/5 duzeltmesinde p ≈ 0: mod 3 etkisi k ≥ 3'te
+    gorunur. Sonuc: buyukluk ve mod 3 hesaba katilinca zincirde hafiza yoktur; her adim bagimsiz
+    bir "asal mi" denemesidir.
+
+3) RAKAM YAPISI
+  Yontem: P8+ baslangiclari ile duzgun dagilimli siradan asallarin rakam sikligi (son rakam
+    haric, ki-kare), ilk rakam, alt 6 basamaktaki 0/1 sayisi, log10(KED(p)/p) ve basamak buyumesi.
+  Kaynak: rakam kareleri toplami / mutlu sayilar (OEIS A003132, A007770; Grundman & Teeple).
+  Bulgu: Fark cok anlamli (ki-kare 1075, sd 9). En guclu etki ilk rakamda: P8+ baslangiclarinda
+    ilk rakam 1 olanlar 1,51 kat, 9 olanlar 0,67 kat. Sebep: KED(p)/p ≈ ilk rakam buyuklugu;
+    kucuk ilk rakam terimleri yavas buyutur, ln x kucuk kalir ve uzama olasiligi artar
+    (KED(p)/p ortalamasi siradan asallarda 4,74, P8+'da 4,15). Govdede de 1,2,3 hafif fazla,
+    7,8,9 hafif az. Alt basamaklardaki 0/1 sayisi zincir uzunluguyla degismiyor (~1,2); 0/1'in
+    etkisi yalniz sabit noktalarda (KED(n) = n) belirgin. Her adim terimi ortalama ×3,7–3,9 buyutur.
+
+4) 3'E GORE SINIFLAMA
+  Yontem: c(p) = 3'e bolunmeyen rakam sayisi mod 3 ≡ KED(p) mod 3. Sinif basina P2/P1.
+  Kaynak: KED(n) ≡ Σd² (mod 9), mutlu sayi kuramindaki degismezlik.
+  Bulgu: Siniflar esit buyuklukte (%33,4 / %33,2 / %33,5). Sinif 0'da P2 = 0 (2.087.715 P1'e
+    karsi). Sinif 1 ve 2'de P2/P1 = 0,1116 ve 0,1115; model 0,1116. Teori birebir dogrulandi.
+    P8+ zincirlerinde KED'i 3'e bolunen ara terim yok (0 / 139.264). Mod 11'de de ayni yapi:
+    KED(p)'si 11'e bolunen %9,09 asalin hicbiri uzamaz.
+
+5) KUMELENME
+  Yontem: Baslangiclar arasindaki bosluklar egilim egrisiyle birim yogunluga donusturulup
+    ustel dagilima Kolmogorov–Smirnov testiyle karsilastirilir; birlesen ailelerden tek temsilci
+    alinarak tekrarlanir.
+  Kaynak: Kolmogorov–Smirnov (Stephens yaklasimi); Gallagher (1976).
+  Bulgu: Butun P10+ baslangiclarinda kumelenme var (D = 0,103, p = 1e-4; boslugun %9,8'i
+    ortalamanin %1'inden kisa, Poisson'da %1). Aile basina tek baslangic alininca kumelenme
+    kayboluyor (D = 0,045, p = 0,45). Kumelenmenin kaynagi ayni KED(p)'ye giden komsu
+    baslangiclardir. P8+/P9+'da aile duzeltmesinden sonra da kucuk ama anlamli sapma kaliyor;
+    bunun buyuk kismi buyuk olcekte egilim egrisinin uyumsuzlugu (20 kutulu ki-kare).
+
+6) EGILIM VE ONGORU
+  Yontem: milyon asal basina Pk = A/(ln x)^b, Poisson en cok olabilirlik (P6–P11 milyarlik
+    bloklardan, P2–P5 tarama toplamlarindan). P10+ icin P8/P9 egrilerinden zincirleme uzanti.
+  Kaynak: Bateman–Horn (1962); Cunningham zincirleri icin N/(log N)^k sayimi (Loh 1989).
+  Bulgu: b(P2..P9) = 1,17 · 2,44 · 3,66 · 4,81 · 5,47 · 6,41 · 7,39 · 8,62; her uzunluk b'yi
+    ~1 artirir, Bateman–Horn sezgisindeki b ≈ k−1 ile uyumlu. Uzanti, taranan bolge icin
+    P10 413,6 (gozlenen 439), P11 22,4 (20), P12 1,2 (2) verir.
+    Ongoru:  1000–2000T: P10 ≈ 247, P11 ≈ 12, P12 ≈ 0,6
+             2000–5000T: P10 ≈ 574, P11 ≈ 28, P12 ≈ 1,3, P13 ≈ 0,1
+             10^16–10^17: P10 ≈ 8.000, P11 ≈ 360, P12 ≈ 16, P13 ≈ 0,7
+    Sonraki P12 icin medyan bekleme ≈ 2.150T. Ilk P13'te birikimli beklenen 1'e ~1,2·10^17'de
+    ulasir; sonraki medyan ≈ 7,4·10^16. Iki P12 tek bir aile oldugundan bagimsiz olay 1'dir.
+
+7) REKORLAR
+  Yontem: Ilk gorunum; kucuk uzunluklar 2.000.000'a kadar Python'la, buyukleri dosyalardan.
+  Kaynak: Cunningham zinciri en kucuk baslangic tablolari (OEIS A005602/A005603).
+  Bulgu: P1 2 · P2 13 · P3 37 · P4 17 · P5 1.013 · P6 52.259 · P7 1.067.459 · P8 285.497 ·
+    P9 2.440.504.421 · P10 619.474.960.121 · P11 30.705.726.098.857 · P12 646.710.703.896.167.
+    Siralama monoton degil: KED(285.497) = 1.067.459 oldugundan ilk P8, ilk P7'nin bir oncesidir.
+    P9 ve ustu modelin ongordugu yerlerde cikti (P12: model 746T, gercek 647T).
+
+8) BIRLESEN ZINCIRLER
+  Yontem: P8+ terimleri fonksiyon grafi olarak incelenir: ≥2 onculu dugumler, birlesim-bul ile
+    aileler, 10^5–10^6'da KED onimge dagilimi.
+  Kaynak: Flajolet & Odlyzko (1990) rastgele esleme istatistikleri.
+  Bulgu: KED birebir degil (en basit ornek KED(19) = KED(31) = 91; 2 basamakta tek carpisma).
+    P8+'da 19.800 birlesme dugumu var, cogu 2. terimde (16.407). Bagimsiz aile sayilari:
+    P8 131.340 → 108.456, P9 7.463 → 6.168, P10 439 → 353, P11 20 → 17, P12 2 → 1.
+    Zincirlerin yaklasik %17'si baska bir zincirin kuyrugunu tekrar ediyor. 10^5–10^6'da en cok
+    onimgeli deger 914.991 (11 onimge).
+
+9) KONTROL DENEYI
+  Yontem: ayni yineleme (a) asal baslangic, (b) 2/5'e bolunmeyen bilesik tek baslangic,
+    (c) KED(t) + 10·U rastgele esleme ile; pencere basina 15.000 ornek (toplam 780.000).
+  Kaynak: Monte Carlo kontrol; rastgele esleme Cramer modelinin benzetimi.
+  Bulgu: ≥2 orani: gercek 0,0725 · bilesik 0,0715 · rastgele 0,0705 · tarama 0,0715. ≥3 ve ≥4'te
+    de fark ornek hatasi icinde. Baslangicin asal olmasi sonraki adimlari etkilemiyor. Rastgele
+    esleme mod 3 yapisini bozdugu halde ortalama ayni: sinif 0'in kaybi siniflar 1/2'nin
+    ×3/2 kazanciyla tam dengeleniyor.
+
+10) YEREL CARPANLAR (ek analiz, Bateman–Horn tekil serisi)
+  Yontem: her q ≤ 97 icin P(q | KED): siradan asallarda KED(p), zincir icinde KED(t_k) ve
+    P8+'yi sonlayan bilesikler. Etkin sabit C = 2,5 · Π (1−ρ_q)/(1−1/q).
+  Kaynak: Hardy–Littlewood (1923); Bateman–Horn (1962); Aletheia-Zomlefer ve ark. (2020).
+  Bulgu: Butun q icin ρ_q = 1/q (q·ρ = 1,00 ± 0,01); C = 2,499 ≈ 2,5. 2 ve 5 disinda KED
+    degerleri ortalamada rastgele sayi gibi bolunur; mod 3/mod 11 etkisi bireysel asal icin
+    belirleyicidir ama ortalamada sifirlanir. Sonlayan bilesiklerde q·ρ ≈ 1,06 (bilesik olma
+    kosulu). Olum nedenleri: 3 → %35, 7 → %10, 11 → %5,5, 13 → %4,3; %16'sinin 1000'den kucuk
+    carpani yok.
+
+GENEL SONUC
+  KED zincirleri sezgisel modele cok iyi uyuyor: her adim, son rakami 1/9 olan ~ln x buyuklugunde
+  bir sayinin asal olma denemesi (2,5/ln x) ve mod 3 sinifi belirleyici. Zincirde hafiza yok.
+  Gozlenen tek "kumelenme" ayni KED degerinde birlesen ailelerden geliyor. Uzun zincir
+  istatistiklerinde (P10+) aileler tek olay sayilmali. Siradaki P12'nin ~2.000T civarinda,
+  ilk P13'un ise 10^17 mertebesinde cikmasi bekleniyor.
